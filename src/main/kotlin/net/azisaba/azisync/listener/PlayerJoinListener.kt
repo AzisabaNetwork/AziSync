@@ -20,11 +20,10 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
                     this.cancel()
                     return
                 }
-                // Changed to pitch 1.0 and frequency every 1 second to be less annoying
                 p.playSound(p.location, org.bukkit.Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f)
                 count++
             }
-        }.runTaskTimer(plugin, 0L, 20L) // Changed to 20L (1 second)
+        }.runTaskTimer(plugin, 0L, 20L)
 
         Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, Runnable {
             val player = Bukkit.getPlayer(uuid)
