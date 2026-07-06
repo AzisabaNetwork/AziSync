@@ -1,0 +1,60 @@
+# default config.yml for AziSync
+
+# config version
+version: 1.0
+
+# database connection
+database:
+  host: localhost
+  port: 3306
+  database: "azisync"
+  username: "azisync"
+  password: "azisync"
+  useSSL: false
+  databaseName: "azisync"
+  TablesNames:
+    inventoryTableName: "azisync_inventory"
+    enderChestTableName: "azisync_enderchest"
+    experienceTableName: "azisync_experience"
+    potionEffectsTableName: "azisync_potioneffects"
+    advancementTableName: "azisync_advancement"
+    healthFoodAirTableName: "azisync_healthfoodair"
+    locationTableName: "azisync_location"
+    economyTableName: "azisync_economy"
+
+
+general:
+  enableModules:
+    shareInventory: false
+    shareGameMode: false
+    shareArmor: false
+    shareEnderChest: false
+    shareExperience: false
+    sharePotionEffects: false
+    shareAdvancement: false
+    shareHealth: false
+    shareFood: false
+    shareAir: false
+    shareLocation: false
+    shareBedSpawn: false
+    shareEconomy: false
+  economyOptions:
+    ChestShop-Support: false
+    ShopChest-Support: false
+    AuctionHouse-Support: false
+    CrazyAuctions-Support: false
+    EssentialsEconomyCommands-Support: false
+  saveDataTask:
+    enabled: false
+    interval: 300 # in seconds
+    hideLogMessage: false
+  disableSounds: false
+  disableCreativeItemShare: false
+  kickOnFailedSync: false
+  locationSyncOptions:
+    onlineTimeToSaveLocation: 0
+
+debugMessage:
+  EconomySync: false
+  InventorySync: false
+  HealthSync: false

@@ -1,0 +1,19 @@
+prefix: "&8[&bAziSync&8] "
+no_permission: "&cこのコマンドを実行する権限がありません。"
+unknown_command: "&c不明なコマンド引数です。"
+reload_success: "&a設定ファイルと言語ファイルを再読み込みしました。"
+save_initiated: "&a全オンラインプレイヤーのデータ保存を開始しました..."
+save_started_player: "&aデータの保存処理が開始されました。"
+
+action_blocked_loading: "&cデータが読み込み中のため、そのアクションはできません。"
+
+# Commands
+player_not_found: "&c指定されたプレイヤーが見つかりません。"
+save_player_success: "&a{player} のデータ保存を開始しました。"
+load_player_success: "&a{player} のデータ読み込みを開始しました。"
+help_header: "&a=== AziSync Commands ==="
+help_reload: "&a/azisync reload &7- 設定ファイルと言語ファイルを再読み込みします"
+help_saveall: "&a/azisync saveall &7- 全オンラインプレイヤーのデータを保存します"
+help_save: "&a/azisync save <player> &7- 指定したプレイヤーのデータを保存します"
+help_load: "&a/azisync load <player> &7- 指定したプレイヤーのデータを読み込みます"
+sync_complete: "&aデータの同期が完了しました。"

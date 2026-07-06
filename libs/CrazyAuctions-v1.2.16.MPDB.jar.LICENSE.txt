@@ -1,0 +1,16 @@
+■ License and Copyright Notices for External Libraries
+
+The following file, included in this project's compilation environment (libs/), is third-party open-source software. In accordance with the terms of the LGPL-3.0 license, the copyright information and source location regarding its reproduction and redistribution are specified below.
+
+[Target File]
+CrazyAuctions-v1.2.16.MPDB.jar file
+
+[Library Details]
+・Library Name: CrazyAuctions (brunyman fork)
+・Copyright Holder (Contributors): brunyman
+・License: GNU Lesser General Public License v3.0 (LGPL-3.0)
+・Original Source Code Location: https://github.com
+
+[License Terms]
+The full text of the LGPL-3.0 license can be viewed at the following official page:
+https://www.gnu.org/licenses/lgpl-3.0.html

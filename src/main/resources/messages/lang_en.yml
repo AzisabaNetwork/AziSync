@@ -1,0 +1,19 @@
+prefix: "&8[&bAziSync&8] "
+no_permission: "&cYou don't have permission to use this command."
+unknown_command: "&cUnknown command argument."
+reload_success: "&aAziSync configuration and messages reloaded."
+save_initiated: "&aSaving all online players data..."
+save_started_player: "&aData save initiated."
+
+action_blocked_loading: "&cYour data is still loading, please wait."
+
+# Commands
+player_not_found: "&cPlayer not found."
+save_player_success: "&aInitiated data save for {player}."
+load_player_success: "&aInitiated data load for {player}."
+help_header: "&a=== AziSync Commands ==="
+help_reload: "&a/azisync reload &7- Reload configuration and language files"
+help_saveall: "&a/azisync saveall &7- Save all online players data"
+help_save: "&a/azisync save <player> &7- Save specific player's data"
+help_load: "&a/azisync load <player> &7- Load specific player's data"
+sync_complete: "&aData synchronization completed."

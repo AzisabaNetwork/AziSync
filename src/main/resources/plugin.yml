@@ -1,0 +1,22 @@
+name: AziSync
+description: $description
+version: '${version}'
+main: net.azisaba.azisync.AziSync
+api-version: '1.13'
+author: Azisaba Network
+website: https://github.com/AzisabaNetwork/AziSync
+load: POSTWORLD
+softdepend:
+  - Vault
+  - Jobs
+  - ChestShop
+  - ShopChest
+  - CrazyAuctions
+commands:
+  azisync:
+    description: AziSync command
+    usage: /azisync
+permissions:
+  azisync.*:
+    description: Allows the user to use the /azisync command
+    default: op
