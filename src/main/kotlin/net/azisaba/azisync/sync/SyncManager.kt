@@ -76,6 +76,10 @@ class SyncManager(private val plugin: AziSync) {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
+                if (syncComplete) {
+                    setSyncStatus(uuid, playerName, false)
+                }
+                
                 var waitCount = 0
                 while (plugin.hookManager.jobsHook.isPlayerSaving(uuid) && waitCount < 20) {
                     Thread.sleep(250)

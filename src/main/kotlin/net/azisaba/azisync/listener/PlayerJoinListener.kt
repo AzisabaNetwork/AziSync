@@ -25,11 +25,33 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
             }
         }.runTaskTimer(plugin, 0L, 20L)
 
-        Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, Runnable {
-            val player = Bukkit.getPlayer(uuid)
-            if (player != null && player.isOnline) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
+            val player = Bukkit.getPlayer(uuid) ?: return@Runnable
+            var waitCount = 0
+            
+            // Wait until sync_complete is true
+            while (waitCount < 40) {
+                val status = plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)
+                if (status == null || status == "true") {
+                    break
+                }
+                Thread.sleep(250)
+                waitCount++
+            }
+            
+            if (waitCount >= 40) {
+                plugin.logger.warning("Data sync timeout for player ${player.name}")
+                if (plugin.config.getBoolean("general.kickOnFailedSync", false)) {
+                    Bukkit.getScheduler().runTask(plugin, Runnable {
+                        player.kickPlayer("Data sync timeout. Please reconnect.")
+                    })
+                    return@Runnable
+                }
+            }
+            
+            if (player.isOnline) {
                 plugin.syncManager.loadData(player)
             }
-        }, 10L)
+        })
     }
 }

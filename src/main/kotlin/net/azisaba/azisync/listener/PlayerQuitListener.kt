@@ -16,10 +16,6 @@ class PlayerQuitListener(private val plugin: AziSync) : Listener {
         val playerName = player.name
 
         plugin.syncManager.saveData(player, true)
-
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            plugin.syncManager.setSyncStatus(uuid, playerName, false)
-        })
         
         plugin.syncManager.removeLoadedStatus(uuid)
     }
