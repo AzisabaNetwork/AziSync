@@ -34,7 +34,7 @@ dependencies {
     compileOnly("de.epiceric:ShopChest:1.13-SNAPSHOT")
     compileOnly("com.acrobot.chestshop:chestshop:3.12.2")
     compileOnly("Jobs:jobs:5.2.6.7")
-    compileOnly(files("../CraftGUI/build/classes/java/main"))
+    compileOnly("net.azisaba:CraftGUI:1.15.2+1.1.1")
     compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
     implementation("com.zaxxer:HikariCP:4.0.3")
     implementation("mysql:mysql-connector-java:8.0.33")
