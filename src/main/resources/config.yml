@@ -3,6 +3,17 @@
 # config version
 version: 1.0
 
+# storage type (MYSQL or REDIS)
+storage:
+  type: MYSQL
+
+# redis connection
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  timeout: 2000
+
 # database connection
 database:
   host: localhost

@@ -38,6 +38,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:4.0.3")
     implementation("mysql:mysql-connector-java:8.0.33")
     implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
+    implementation("redis.clients:jedis:5.1.0")
 }
 
 kotlin {
