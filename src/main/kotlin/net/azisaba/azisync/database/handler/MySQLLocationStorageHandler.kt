@@ -4,16 +4,22 @@ import net.azisaba.azisync.AziSync
 import java.sql.SQLException
 import java.util.UUID
 
-data class DatabasePotionData(
-    val potionEffects: String,
+data class DatabaseLocationData(
+    val world: String,
+    val x: Double,
+    val y: Double,
+    val z: Double,
+    val yaw: Float,
+    val pitch: Float,
+    val bedSpawn: String,
     val syncComplete: String,
     val lastSeen: String
 )
 
-class PotionEffectsStorageHandler(private val plugin: AziSync) {
+class MySQLLocationStorageHandler(private val plugin: AziSync) {
 
     private val tableName: String
-        get() = plugin.config.getString("database.TablesNames.potionEffectsTableName", "azisync_potioneffects")!!
+        get() = plugin.config.getString("database.TablesNames.locationTableName", "azisync_location")!!
 
     fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
@@ -43,25 +49,31 @@ class PotionEffectsStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     INSERT INTO `$tableName`
-                    (`player_uuid`, `player_name`, `potion_effects`, `last_seen`, `sync_complete`) 
-                    VALUES(?, ?, ?, ?, ?)
+                    (`player_uuid`, `player_name`, `world`, `x`, `y`, `z`, `yaw`, `pitch`, `bed_spawn`, `last_seen`, `sync_complete`) 
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, uuid.toString())
                     stmt.setString(2, playerName)
-                    stmt.setString(3, "none")
-                    stmt.setString(4, System.currentTimeMillis().toString())
-                    stmt.setString(5, "true")
+                    stmt.setString(3, "world")
+                    stmt.setDouble(4, 0.0)
+                    stmt.setDouble(5, 0.0)
+                    stmt.setDouble(6, 0.0)
+                    stmt.setFloat(7, 0f)
+                    stmt.setFloat(8, 0f)
+                    stmt.setString(9, "none")
+                    stmt.setString(10, System.currentTimeMillis().toString())
+                    stmt.setString(11, "true")
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error creating potion effects account for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error creating location account for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabasePotionData? {
+    fun getData(uuid: UUID, playerName: String): DatabaseLocationData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -72,8 +84,14 @@ class PotionEffectsStorageHandler(private val plugin: AziSync) {
                 stmt.setString(1, uuid.toString())
                 stmt.executeQuery().use { rs ->
                     if (rs.next()) {
-                        return DatabasePotionData(
-                            rs.getString("potion_effects"),
+                        return DatabaseLocationData(
+                            rs.getString("world"),
+                            rs.getDouble("x"),
+                            rs.getDouble("y"),
+                            rs.getDouble("z"),
+                            rs.getFloat("yaw"),
+                            rs.getFloat("pitch"),
+                            rs.getString("bed_spawn"),
                             rs.getString("sync_complete"),
                             rs.getString("last_seen")
                         )
@@ -96,12 +114,22 @@ class PotionEffectsStorageHandler(private val plugin: AziSync) {
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error setting potion effects sync status for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error setting location sync status for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, potionEffects: String, syncStatus: String): Boolean {
+    fun setData(
+        uuid: UUID, playerName: String, 
+        world: String, 
+        x: Double, 
+        y: Double, 
+        z: Double, 
+        yaw: Float, 
+        pitch: Float, 
+        bedSpawn: String, 
+        syncStatus: String
+    ): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -109,20 +137,26 @@ class PotionEffectsStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     UPDATE `$tableName` 
-                    SET `player_name` = ?, `potion_effects` = ?, `sync_complete` = ?, `last_seen` = ? 
+                    SET `player_name` = ?, `world` = ?, `x` = ?, `y` = ?, `z` = ?, `yaw` = ?, `pitch` = ?, `bed_spawn` = ?, `sync_complete` = ?, `last_seen` = ? 
                     WHERE `player_uuid` = ?
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, playerName)
-                    stmt.setString(2, potionEffects)
-                    stmt.setString(3, syncStatus)
-                    stmt.setString(4, System.currentTimeMillis().toString())
-                    stmt.setString(5, uuid.toString())
+                    stmt.setString(2, world)
+                    stmt.setDouble(3, x)
+                    stmt.setDouble(4, y)
+                    stmt.setDouble(5, z)
+                    stmt.setFloat(6, yaw)
+                    stmt.setFloat(7, pitch)
+                    stmt.setString(8, bedSpawn)
+                    stmt.setString(9, syncStatus)
+                    stmt.setString(10, System.currentTimeMillis().toString())
+                    stmt.setString(11, uuid.toString())
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error saving potion effects data for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error saving location data for ${playerName}: ${e.message}")
             false
         }
     }

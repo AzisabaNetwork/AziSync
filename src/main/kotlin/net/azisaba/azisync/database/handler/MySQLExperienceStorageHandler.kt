@@ -4,16 +4,19 @@ import net.azisaba.azisync.AziSync
 import java.sql.SQLException
 import java.util.UUID
 
-data class DatabaseEnderchestData(
-    val enderchest: String,
+data class DatabaseExperienceData(
+    val exp: Float,
+    val expToLevel: Int,
+    val totalExp: Int,
+    val expLvl: Int,
     val syncComplete: String,
     val lastSeen: String
 )
 
-class EnderchestStorageHandler(private val plugin: AziSync) {
+class MySQLExperienceStorageHandler(private val plugin: AziSync) {
 
     private val tableName: String
-        get() = plugin.config.getString("database.TablesNames.enderchestTableName", "azisync_enderchest")!!
+        get() = plugin.config.getString("database.TablesNames.experienceTableName", "azisync_experience")!!
 
     fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
@@ -21,9 +24,7 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setString(1, uuid.toString())
                 stmt.executeQuery().use { rs ->
-                    if (rs.next()) {
-                        return rs.getString("sync_complete")
-                    }
+                    if (rs.next()) return rs.getString("sync_complete")
                 }
             }
         }
@@ -35,9 +36,7 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
             val sql = "SELECT `player_uuid` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setString(1, uuid.toString())
-                stmt.executeQuery().use { rs ->
-                    return rs.next()
-                }
+                stmt.executeQuery().use { rs -> return rs.next() }
             }
         }
     }
@@ -47,25 +46,28 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     INSERT INTO `$tableName`
-                    (`player_uuid`, `player_name`, `enderchest`, `last_seen`, `sync_complete`) 
-                    VALUES(?, ?, ?, ?, ?)
+                    (`player_uuid`, `player_name`, `exp`, `exp_to_level`, `total_exp`, `exp_lvl`, `last_seen`, `sync_complete`) 
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, uuid.toString())
                     stmt.setString(2, playerName)
-                    stmt.setString(3, "none")
-                    stmt.setString(4, System.currentTimeMillis().toString())
-                    stmt.setString(5, "true")
+                    stmt.setFloat(3, 0f)
+                    stmt.setInt(4, 0)
+                    stmt.setInt(5, 0)
+                    stmt.setInt(6, 0)
+                    stmt.setString(7, System.currentTimeMillis().toString())
+                    stmt.setString(8, "true")
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error creating enderchest account for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error creating experience account for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabaseEnderchestData? {
+    fun getData(uuid: UUID, playerName: String): DatabaseExperienceData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -76,8 +78,11 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
                 stmt.setString(1, uuid.toString())
                 stmt.executeQuery().use { rs ->
                     if (rs.next()) {
-                        return DatabaseEnderchestData(
-                            rs.getString("enderchest"),
+                        return DatabaseExperienceData(
+                            rs.getFloat("exp"),
+                            rs.getInt("exp_to_level"),
+                            rs.getInt("total_exp"),
+                            rs.getInt("exp_lvl"),
                             rs.getString("sync_complete"),
                             rs.getString("last_seen")
                         )
@@ -100,12 +105,12 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error setting enderchest sync status for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error setting experience sync status for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, enderchest: String, syncStatus: String): Boolean {
+    fun setData(uuid: UUID, playerName: String, exp: Float, expToLevel: Int, totalExp: Int, expLvl: Int, syncStatus: String): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -113,20 +118,23 @@ class EnderchestStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     UPDATE `$tableName` 
-                    SET `player_name` = ?, `enderchest` = ?, `sync_complete` = ?, `last_seen` = ? 
+                    SET `player_name` = ?, `exp` = ?, `exp_to_level` = ?, `total_exp` = ?, `exp_lvl` = ?, `sync_complete` = ?, `last_seen` = ? 
                     WHERE `player_uuid` = ?
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, playerName)
-                    stmt.setString(2, enderchest)
-                    stmt.setString(3, syncStatus)
-                    stmt.setString(4, System.currentTimeMillis().toString())
-                    stmt.setString(5, uuid.toString())
+                    stmt.setFloat(2, exp)
+                    stmt.setInt(3, expToLevel)
+                    stmt.setInt(4, totalExp)
+                    stmt.setInt(5, expLvl)
+                    stmt.setString(6, syncStatus)
+                    stmt.setString(7, System.currentTimeMillis().toString())
+                    stmt.setString(8, uuid.toString())
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error saving enderchest data for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error saving experience data for ${playerName}: ${e.message}")
             false
         }
     }

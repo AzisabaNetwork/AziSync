@@ -4,19 +4,16 @@ import net.azisaba.azisync.AziSync
 import java.sql.SQLException
 import java.util.UUID
 
-data class DatabaseExperienceData(
-    val exp: Float,
-    val expToLevel: Int,
-    val totalExp: Int,
-    val expLvl: Int,
+data class DatabasePotionData(
+    val potionEffects: String,
     val syncComplete: String,
     val lastSeen: String
 )
 
-class ExperienceStorageHandler(private val plugin: AziSync) {
+class MySQLPotionEffectsStorageHandler(private val plugin: AziSync) {
 
     private val tableName: String
-        get() = plugin.config.getString("database.TablesNames.experienceTableName", "azisync_experience")!!
+        get() = plugin.config.getString("database.TablesNames.potionEffectsTableName", "azisync_potioneffects")!!
 
     fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
@@ -46,28 +43,25 @@ class ExperienceStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     INSERT INTO `$tableName`
-                    (`player_uuid`, `player_name`, `exp`, `exp_to_level`, `total_exp`, `exp_lvl`, `last_seen`, `sync_complete`) 
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    (`player_uuid`, `player_name`, `potion_effects`, `last_seen`, `sync_complete`) 
+                    VALUES(?, ?, ?, ?, ?)
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, uuid.toString())
                     stmt.setString(2, playerName)
-                    stmt.setFloat(3, 0f)
-                    stmt.setInt(4, 0)
-                    stmt.setInt(5, 0)
-                    stmt.setInt(6, 0)
-                    stmt.setString(7, System.currentTimeMillis().toString())
-                    stmt.setString(8, "true")
+                    stmt.setString(3, "none")
+                    stmt.setString(4, System.currentTimeMillis().toString())
+                    stmt.setString(5, "true")
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error creating experience account for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error creating potion effects account for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabaseExperienceData? {
+    fun getData(uuid: UUID, playerName: String): DatabasePotionData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -78,11 +72,8 @@ class ExperienceStorageHandler(private val plugin: AziSync) {
                 stmt.setString(1, uuid.toString())
                 stmt.executeQuery().use { rs ->
                     if (rs.next()) {
-                        return DatabaseExperienceData(
-                            rs.getFloat("exp"),
-                            rs.getInt("exp_to_level"),
-                            rs.getInt("total_exp"),
-                            rs.getInt("exp_lvl"),
+                        return DatabasePotionData(
+                            rs.getString("potion_effects"),
                             rs.getString("sync_complete"),
                             rs.getString("last_seen")
                         )
@@ -105,12 +96,12 @@ class ExperienceStorageHandler(private val plugin: AziSync) {
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error setting experience sync status for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error setting potion effects sync status for ${playerName}: ${e.message}")
             false
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, exp: Float, expToLevel: Int, totalExp: Int, expLvl: Int, syncStatus: String): Boolean {
+    fun setData(uuid: UUID, playerName: String, potionEffects: String, syncStatus: String): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -118,23 +109,20 @@ class ExperienceStorageHandler(private val plugin: AziSync) {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
                     UPDATE `$tableName` 
-                    SET `player_name` = ?, `exp` = ?, `exp_to_level` = ?, `total_exp` = ?, `exp_lvl` = ?, `sync_complete` = ?, `last_seen` = ? 
+                    SET `player_name` = ?, `potion_effects` = ?, `sync_complete` = ?, `last_seen` = ? 
                     WHERE `player_uuid` = ?
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, playerName)
-                    stmt.setFloat(2, exp)
-                    stmt.setInt(3, expToLevel)
-                    stmt.setInt(4, totalExp)
-                    stmt.setInt(5, expLvl)
-                    stmt.setString(6, syncStatus)
-                    stmt.setString(7, System.currentTimeMillis().toString())
-                    stmt.setString(8, uuid.toString())
+                    stmt.setString(2, potionEffects)
+                    stmt.setString(3, syncStatus)
+                    stmt.setString(4, System.currentTimeMillis().toString())
+                    stmt.setString(5, uuid.toString())
                     stmt.executeUpdate() > 0
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error saving experience data for ${playerName}: ${e.message}")
+            plugin.logger.warning("Error saving potion effects data for ${playerName}: ${e.message}")
             false
         }
     }

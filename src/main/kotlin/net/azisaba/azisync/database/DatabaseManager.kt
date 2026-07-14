@@ -9,19 +9,39 @@ import java.sql.SQLException
 
 class DatabaseManager(private val plugin: AziSync) {
     private var dataSource: HikariDataSource? = null
+    var redisManager: RedisManager? = null
 
-    val inventoryHandler by lazy { InventoryStorageHandler(plugin) }
-    val enderchestHandler by lazy { EnderchestStorageHandler(plugin) }
-    val economyHandler by lazy { EconomyStorageHandler(plugin) }
-    val experienceHandler by lazy { ExperienceStorageHandler(plugin) }
-    val healthHandler by lazy { HealthStorageHandler(plugin) }
-    val locationHandler by lazy { LocationStorageHandler(plugin) }
-    val potionEffectsHandler by lazy { PotionEffectsStorageHandler(plugin) }
+    val isRedis: Boolean = plugin.config.getString("storage.type", "MYSQL")!!.equals("REDIS", ignoreCase = true)
 
+    val inventoryHandler: InventoryStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisInventoryStorageHandler(plugin) else MySQLInventoryStorageHandler(plugin) 
+    }
+    val enderchestHandler: EnderchestStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisEnderchestStorageHandler(plugin) else MySQLEnderchestStorageHandler(plugin) 
+    }
+    val economyHandler: EconomyStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisEconomyStorageHandler(plugin) else MySQLEconomyStorageHandler(plugin) 
+    }
+    val experienceHandler: ExperienceStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisExperienceStorageHandler(plugin) else MySQLExperienceStorageHandler(plugin) 
+    }
+    val healthHandler: HealthStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisHealthStorageHandler(plugin) else MySQLHealthStorageHandler(plugin) 
+    }
+    val locationHandler: LocationStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisLocationStorageHandler(plugin) else MySQLLocationStorageHandler(plugin) 
+    }
+    val potionEffectsHandler: PotionEffectsStorageHandler by lazy { 
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisPotionEffectsStorageHandler(plugin) else MySQLPotionEffectsStorageHandler(plugin) 
+    }
 
     init {
-        setupPool()
-        createTables()
+        if (isRedis) {
+            redisManager = RedisManager(plugin)
+        } else {
+            setupPool()
+            createTables()
+        }
     }
 
     private fun setupPool() {
