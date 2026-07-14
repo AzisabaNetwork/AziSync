@@ -32,6 +32,7 @@ database:
     healthFoodAirTableName: "azisync_healthfoodair"
     locationTableName: "azisync_location"
     economyTableName: "azisync_economy"
+    craftGuiTableName: "azisync_craftgui"
 
 
 general:
@@ -49,6 +50,7 @@ general:
     shareLocation: false
     shareBedSpawn: false
     shareEconomy: false
+    shareCraftGui: false
   economyOptions:
     ChestShop-Support: false
     ShopChest-Support: false
