@@ -10,12 +10,12 @@ data class DatabaseEnderchestData(
     val lastSeen: String
 )
 
-class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
+class MySQLEnderchestStorageHandler(private val plugin: AziSync) : EnderchestStorageHandler {
 
     private val tableName: String
         get() = plugin.config.getString("database.TablesNames.enderchestTableName", "azisync_enderchest")!!
 
-    fun getSyncStatus(uuid: UUID): String? {
+    override fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `sync_complete` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -30,7 +30,7 @@ class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun hasAccount(uuid: UUID): Boolean {
+    override fun hasAccount(uuid: UUID): Boolean {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `player_uuid` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -42,7 +42,7 @@ class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun createAccount(uuid: UUID, playerName: String): Boolean {
+    override fun createAccount(uuid: UUID, playerName: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
@@ -65,7 +65,7 @@ class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabaseEnderchestData? {
+    override fun getData(uuid: UUID, playerName: String): DatabaseEnderchestData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -88,7 +88,7 @@ class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
+    override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = "UPDATE `$tableName` SET `sync_complete` = ?, `last_seen` = ? WHERE `player_uuid` = ?"
@@ -105,7 +105,7 @@ class MySQLEnderchestStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, enderchest: String, syncStatus: String): Boolean {
+    override fun setData(uuid: UUID, playerName: String, enderchest: String, syncStatus: String): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }

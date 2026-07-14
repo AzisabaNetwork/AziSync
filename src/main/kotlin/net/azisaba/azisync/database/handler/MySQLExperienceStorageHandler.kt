@@ -13,12 +13,12 @@ data class DatabaseExperienceData(
     val lastSeen: String
 )
 
-class MySQLExperienceStorageHandler(private val plugin: AziSync) {
+class MySQLExperienceStorageHandler(private val plugin: AziSync) : ExperienceStorageHandler {
 
     private val tableName: String
         get() = plugin.config.getString("database.TablesNames.experienceTableName", "azisync_experience")!!
 
-    fun getSyncStatus(uuid: UUID): String? {
+    override fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `sync_complete` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -31,7 +31,7 @@ class MySQLExperienceStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun hasAccount(uuid: UUID): Boolean {
+    override fun hasAccount(uuid: UUID): Boolean {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `player_uuid` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -41,7 +41,7 @@ class MySQLExperienceStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun createAccount(uuid: UUID, playerName: String): Boolean {
+    override fun createAccount(uuid: UUID, playerName: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
@@ -67,7 +67,7 @@ class MySQLExperienceStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabaseExperienceData? {
+    override fun getData(uuid: UUID, playerName: String): DatabaseExperienceData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -93,7 +93,7 @@ class MySQLExperienceStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
+    override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = "UPDATE `$tableName` SET `sync_complete` = ?, `last_seen` = ? WHERE `player_uuid` = ?"
@@ -110,7 +110,7 @@ class MySQLExperienceStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, exp: Float, expToLevel: Int, totalExp: Int, expLvl: Int, syncStatus: String): Boolean {
+    override fun setData(uuid: UUID, playerName: String, exp: Float, expToLevel: Int, totalExp: Int, expLvl: Int, syncStatus: String): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }

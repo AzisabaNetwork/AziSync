@@ -33,7 +33,7 @@ dependencies {
     compileOnly("com.github.MilkBowl:VaultAPI:1.7")
     compileOnly("de.epiceric:ShopChest:1.13-SNAPSHOT")
     compileOnly("com.acrobot.chestshop:chestshop:3.12.2")
-    compileOnly("Jobs:jobs:5.2.6.6")
+    compileOnly("Jobs:jobs:5.2.6.7")
     compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
     implementation("com.zaxxer:HikariCP:4.0.3")
     implementation("mysql:mysql-connector-java:8.0.33")

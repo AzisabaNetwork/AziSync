@@ -13,12 +13,12 @@ data class DatabaseInventoryData(
     val lastSeen: String
 )
 
-class MySQLInventoryStorageHandler(private val plugin: AziSync) {
+class MySQLInventoryStorageHandler(private val plugin: AziSync) : InventoryStorageHandler {
 
     private val tableName: String
         get() = plugin.config.getString("database.TablesNames.inventoryTableName", "azisync_inventory")!!
 
-    fun getSyncStatus(uuid: UUID): String? {
+    override fun getSyncStatus(uuid: UUID): String? {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `sync_complete` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -33,7 +33,7 @@ class MySQLInventoryStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun hasAccount(uuid: UUID): Boolean {
+    override fun hasAccount(uuid: UUID): Boolean {
         plugin.databaseManager.getConnection().use { conn ->
             val sql = "SELECT `player_uuid` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
             conn.prepareStatement(sql).use { stmt ->
@@ -45,7 +45,7 @@ class MySQLInventoryStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun createAccount(uuid: UUID, playerName: String): Boolean {
+    override fun createAccount(uuid: UUID, playerName: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = """
@@ -71,7 +71,7 @@ class MySQLInventoryStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun getData(uuid: UUID, playerName: String): DatabaseInventoryData? {
+    override fun getData(uuid: UUID, playerName: String): DatabaseInventoryData? {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
@@ -97,7 +97,7 @@ class MySQLInventoryStorageHandler(private val plugin: AziSync) {
         return null
     }
 
-    fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
+    override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
                 val sql = "UPDATE `$tableName` SET `sync_complete` = ?, `last_seen` = ? WHERE `player_uuid` = ?"
@@ -114,7 +114,7 @@ class MySQLInventoryStorageHandler(private val plugin: AziSync) {
         }
     }
 
-    fun setData(uuid: UUID, playerName: String, inventory: String, armor: String, hotbarSlot: Int, gamemode: Int, syncStatus: String): Boolean {
+    override fun setData(uuid: UUID, playerName: String, inventory: String, armor: String, hotbarSlot: Int, gamemode: Int, syncStatus: String): Boolean {
         if (!hasAccount(uuid)) {
             createAccount(uuid, playerName)
         }
