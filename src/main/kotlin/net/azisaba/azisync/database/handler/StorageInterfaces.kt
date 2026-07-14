@@ -74,3 +74,24 @@ interface PotionEffectsStorageHandler {
     fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean
     fun setData(uuid: UUID, playerName: String, potionEffects: String, syncStatus: String): Boolean
 }
+
+data class DatabaseCraftGuiData(
+    val soundEnabled: Boolean,
+    val showResultItems: Boolean,
+    val craftableOnly: Boolean,
+    val stashEnabled: Boolean,
+    val syncStatus: String,
+    val lastSeen: String
+)
+
+interface CraftGuiStorageHandler {
+    fun getSyncStatus(uuid: UUID): String?
+    fun hasAccount(uuid: UUID): Boolean
+    fun createAccount(uuid: UUID, playerName: String): Boolean
+    fun getData(uuid: UUID, playerName: String): DatabaseCraftGuiData?
+    fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean
+    fun setData(
+        uuid: UUID, playerName: String, soundEnabled: Boolean, showResultItems: Boolean,
+        craftableOnly: Boolean, stashEnabled: Boolean, syncStatus: String
+    ): Boolean
+}

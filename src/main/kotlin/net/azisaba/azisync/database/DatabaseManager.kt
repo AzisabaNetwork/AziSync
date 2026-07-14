@@ -34,6 +34,9 @@ class DatabaseManager(private val plugin: AziSync) {
     val potionEffectsHandler: PotionEffectsStorageHandler by lazy { 
         if (isRedis) net.azisaba.azisync.database.handler.redis.RedisPotionEffectsStorageHandler(plugin) else MySQLPotionEffectsStorageHandler(plugin) 
     }
+    val craftGuiHandler: CraftGuiStorageHandler by lazy {
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisCraftGuiStorageHandler(plugin) else MySQLCraftGuiStorageHandler(plugin)
+    }
 
     init {
         if (isRedis) {
@@ -237,6 +240,27 @@ class DatabaseManager(private val plugin: AziSync) {
                                 player_name VARCHAR(16) $charSet NOT NULL,
                                 money DOUBLE(30,2) NOT NULL,
                                 offline_money DOUBLE(30,2) NOT NULL,
+                                sync_complete VARCHAR(5) NOT NULL DEFAULT 'true',
+                                last_seen CHAR(13) NOT NULL,
+                                PRIMARY KEY(id)
+                            );
+                            """.trimIndent()
+                        )
+                    }
+
+                    // CraftGUI
+                    if (config.getBoolean("general.enableModules.shareCraftGui")) {
+                        val craftGuiTable = config.getString("database.TablesNames.craftGuiTableName", "azisync_craftgui")
+                        statement.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS `$craftGuiTable` (
+                                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                player_uuid CHAR(36) UNIQUE NOT NULL,
+                                player_name VARCHAR(16) $charSet NOT NULL,
+                                sound_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                                show_result_items BOOLEAN NOT NULL DEFAULT TRUE,
+                                craftable_only BOOLEAN NOT NULL DEFAULT FALSE,
+                                stash_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                                 sync_complete VARCHAR(5) NOT NULL DEFAULT 'true',
                                 last_seen CHAR(13) NOT NULL,
                                 PRIMARY KEY(id)
