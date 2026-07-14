@@ -74,6 +74,11 @@ class SyncManager(private val plugin: AziSync) {
         val econ = plugin.hookManager.economyHook.getEconomy()
         val balance = if (shareEconomy && econ != null) econ.getBalance(player) else null
 
+        // CraftGUI
+        val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
+        val craftGuiPlugin = Bukkit.getPluginManager().getPlugin("CraftGUI") as? net.azisaba.craftgui.CraftGUI
+        val craftGuiPref = if (shareCraftGui && craftGuiPlugin != null) craftGuiPlugin.api.getUserPreference(uuid) else null
+
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
                 if (syncComplete) {
@@ -132,6 +137,14 @@ class SyncManager(private val plugin: AziSync) {
                 // Save Economy
                 if (shareEconomy && balance != null) {
                     plugin.databaseManager.economyHandler.setData(uuid, playerName, balance, syncStatus)
+                }
+
+                // Save CraftGUI
+                if (shareCraftGui && craftGuiPref != null) {
+                    plugin.databaseManager.craftGuiHandler.setData(
+                        uuid, playerName, craftGuiPref.isSoundEnabled, craftGuiPref.isShowResultItems,
+                        craftGuiPref.isCraftableOnly, craftGuiPref.isStashEnabled, syncStatus
+                    )
                 }
                 
                 plugin.logger.info("Successfully saved data for $playerName")
@@ -270,6 +283,23 @@ class SyncManager(private val plugin: AziSync) {
                         }
                     }
                 }
+
+                // CraftGUI
+                if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
+                    val craftGuiPlugin = Bukkit.getPluginManager().getPlugin("CraftGUI") as? net.azisaba.craftgui.CraftGUI
+                    if (craftGuiPlugin != null) {
+                        val craftGuiData = plugin.databaseManager.craftGuiHandler.getData(uuid, playerName)
+                        if (craftGuiData != null) {
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                val pref = craftGuiPlugin.api.getUserPreference(uuid)
+                                pref.setSoundEnabled(craftGuiData.soundEnabled)
+                                pref.setShowResultItems(craftGuiData.showResultItems)
+                                pref.setCraftableOnly(craftGuiData.craftableOnly)
+                                pref.setStashEnabled(craftGuiData.stashEnabled)
+                            })
+                        }
+                    }
+                }
                 
                 loadedPlayers[player.uniqueId] = true
                 Bukkit.getScheduler().runTask(plugin, Runnable {
@@ -310,6 +340,9 @@ class SyncManager(private val plugin: AziSync) {
         }
         if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
             plugin.databaseManager.economyHandler.setSyncStatus(uuid, playerName, statusStr)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
+            plugin.databaseManager.craftGuiHandler.setSyncStatus(uuid, playerName, statusStr)
         }
     }
 }
