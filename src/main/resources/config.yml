@@ -3,9 +3,11 @@
 # config version
 version: 1.0
 
-# storage type (MYSQL or REDIS)
+# storage type (SQL or HYBRID)
+# SQL: MySQL/MariaDB only
+# HYBRID: MySQL/MariaDB is persistent storage; Redis is used for fast temporary coordination/cache
 storage:
-  type: MYSQL
+  type: SQL
 
 # redis connection
 redis:

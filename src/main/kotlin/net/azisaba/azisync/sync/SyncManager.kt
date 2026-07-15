@@ -1,6 +1,7 @@
 package net.azisaba.azisync.sync
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.util.AdvancementSerializer
 import net.azisaba.azisync.util.EffectSerializer
 import net.azisaba.azisync.util.ItemSerializer
@@ -158,6 +159,10 @@ class SyncManager(private val plugin: AziSync) {
                         getBooleanPreference(craftGuiPref, "isStashEnabled", false),
                         syncStatus
                     )
+                }
+
+                if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+                    plugin.databaseManager.redisManager?.setSyncStatus(uuid, syncStatus)
                 }
                 
                 plugin.logger.info("Successfully saved data for $playerName")
@@ -346,6 +351,9 @@ class SyncManager(private val plugin: AziSync) {
 
     fun setSyncStatus(uuid: UUID, playerName: String, isComplete: Boolean) {
         val statusStr = if (isComplete) "true" else "false"
+        if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+            plugin.databaseManager.redisManager?.setSyncStatus(uuid, statusStr)
+        }
         if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
             plugin.databaseManager.inventoryHandler.setSyncStatus(uuid, playerName, statusStr)
         }
@@ -376,6 +384,9 @@ class SyncManager(private val plugin: AziSync) {
     }
 
     fun getSyncStatus(uuid: UUID): String? {
+        if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+            plugin.databaseManager.redisManager?.getSyncStatus(uuid)?.let { return it }
+        }
         if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
             return plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)
         }

@@ -4,6 +4,7 @@ import net.azisaba.azisync.AziSync
 import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.JedisPoolConfig
+import java.util.UUID
 
 class RedisManager(private val plugin: AziSync) {
     private var jedisPool: JedisPool? = null
@@ -41,6 +42,29 @@ class RedisManager(private val plugin: AziSync) {
 
     fun getResource(): Jedis {
         return jedisPool?.resource ?: throw IllegalStateException("JedisPool is not initialized")
+    }
+
+    fun getSyncStatus(uuid: UUID): String? {
+        return try {
+            getResource().use { it.get(syncStatusKey(uuid)) }
+        } catch (e: Exception) {
+            plugin.logger.warning("Failed to read sync status from Redis: ${e.message}")
+            null
+        }
+    }
+
+    fun setSyncStatus(uuid: UUID, status: String) {
+        try {
+            getResource().use {
+                it.setex(syncStatusKey(uuid), 300, status)
+            }
+        } catch (e: Exception) {
+            plugin.logger.warning("Failed to write sync status to Redis: ${e.message}")
+        }
+    }
+
+    private fun syncStatusKey(uuid: UUID): String {
+        return "azisync:sync_status:$uuid"
     }
 
     fun close() {

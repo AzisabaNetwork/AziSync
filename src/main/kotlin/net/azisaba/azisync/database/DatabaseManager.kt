@@ -11,42 +11,44 @@ class DatabaseManager(private val plugin: AziSync) {
     private var dataSource: HikariDataSource? = null
     var redisManager: RedisManager? = null
 
-    val isRedis: Boolean = plugin.config.getString("storage.type", "MYSQL")!!.equals("REDIS", ignoreCase = true)
+    enum class StorageMode {
+        SQL,
+        HYBRID
+    }
 
-    val inventoryHandler: InventoryStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisInventoryStorageHandler(plugin) else MySQLInventoryStorageHandler(plugin) 
-    }
-    val enderchestHandler: EnderchestStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisEnderchestStorageHandler(plugin) else MySQLEnderchestStorageHandler(plugin) 
-    }
-    val economyHandler: EconomyStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisEconomyStorageHandler(plugin) else MySQLEconomyStorageHandler(plugin) 
-    }
-    val experienceHandler: ExperienceStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisExperienceStorageHandler(plugin) else MySQLExperienceStorageHandler(plugin) 
-    }
-    val healthHandler: HealthStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisHealthStorageHandler(plugin) else MySQLHealthStorageHandler(plugin) 
-    }
-    val locationHandler: LocationStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisLocationStorageHandler(plugin) else MySQLLocationStorageHandler(plugin) 
-    }
-    val potionEffectsHandler: PotionEffectsStorageHandler by lazy { 
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisPotionEffectsStorageHandler(plugin) else MySQLPotionEffectsStorageHandler(plugin) 
-    }
-    val advancementHandler: AdvancementStorageHandler by lazy {
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisAdvancementStorageHandler(plugin) else MySQLAdvancementStorageHandler(plugin)
-    }
-    val craftGuiHandler: CraftGuiStorageHandler by lazy {
-        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisCraftGuiStorageHandler(plugin) else MySQLCraftGuiStorageHandler(plugin)
-    }
+    val storageMode: StorageMode = resolveStorageMode()
+
+    val inventoryHandler: InventoryStorageHandler by lazy { MySQLInventoryStorageHandler(plugin) }
+    val enderchestHandler: EnderchestStorageHandler by lazy { MySQLEnderchestStorageHandler(plugin) }
+    val economyHandler: EconomyStorageHandler by lazy { MySQLEconomyStorageHandler(plugin) }
+    val experienceHandler: ExperienceStorageHandler by lazy { MySQLExperienceStorageHandler(plugin) }
+    val healthHandler: HealthStorageHandler by lazy { MySQLHealthStorageHandler(plugin) }
+    val locationHandler: LocationStorageHandler by lazy { MySQLLocationStorageHandler(plugin) }
+    val potionEffectsHandler: PotionEffectsStorageHandler by lazy { MySQLPotionEffectsStorageHandler(plugin) }
+    val advancementHandler: AdvancementStorageHandler by lazy { MySQLAdvancementStorageHandler(plugin) }
+    val craftGuiHandler: CraftGuiStorageHandler by lazy { MySQLCraftGuiStorageHandler(plugin) }
 
     init {
-        if (isRedis) {
+        setupPool()
+        createTables()
+
+        if (storageMode == StorageMode.HYBRID) {
             redisManager = RedisManager(plugin)
-        } else {
-            setupPool()
-            createTables()
+        }
+    }
+
+    private fun resolveStorageMode(): StorageMode {
+        return when (val configured = plugin.config.getString("storage.type", "SQL")!!.uppercase()) {
+            "SQL", "MYSQL" -> StorageMode.SQL
+            "HYBRID" -> StorageMode.HYBRID
+            "REDIS" -> {
+                plugin.logger.warning("storage.type=REDIS is no longer supported as a standalone mode. Using HYBRID; SQL remains the persistent storage.")
+                StorageMode.HYBRID
+            }
+            else -> {
+                plugin.logger.warning("Unknown storage.type '$configured'. Falling back to SQL.")
+                StorageMode.SQL
+            }
         }
     }
 
@@ -92,6 +94,7 @@ class DatabaseManager(private val plugin: AziSync) {
     }
 
     fun close() {
+        redisManager?.close()
         if (dataSource != null && !dataSource!!.isClosed) {
             dataSource!!.close()
         }
