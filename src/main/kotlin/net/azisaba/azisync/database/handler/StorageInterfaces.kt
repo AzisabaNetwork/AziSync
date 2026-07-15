@@ -75,6 +75,21 @@ interface PotionEffectsStorageHandler {
     fun setData(uuid: UUID, playerName: String, potionEffects: String, syncStatus: String): Boolean
 }
 
+data class DatabaseAdvancementData(
+    val advancements: String,
+    val syncComplete: String,
+    val lastSeen: String
+)
+
+interface AdvancementStorageHandler {
+    fun getSyncStatus(uuid: UUID): String?
+    fun hasAccount(uuid: UUID): Boolean
+    fun createAccount(uuid: UUID, playerName: String): Boolean
+    fun getData(uuid: UUID, playerName: String): DatabaseAdvancementData?
+    fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean
+    fun setData(uuid: UUID, playerName: String, advancements: String, syncStatus: String): Boolean
+}
+
 data class DatabaseCraftGuiData(
     val soundEnabled: Boolean,
     val showResultItems: Boolean,

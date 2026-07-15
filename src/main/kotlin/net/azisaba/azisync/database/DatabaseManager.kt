@@ -34,6 +34,9 @@ class DatabaseManager(private val plugin: AziSync) {
     val potionEffectsHandler: PotionEffectsStorageHandler by lazy { 
         if (isRedis) net.azisaba.azisync.database.handler.redis.RedisPotionEffectsStorageHandler(plugin) else MySQLPotionEffectsStorageHandler(plugin) 
     }
+    val advancementHandler: AdvancementStorageHandler by lazy {
+        if (isRedis) net.azisaba.azisync.database.handler.redis.RedisAdvancementStorageHandler(plugin) else MySQLAdvancementStorageHandler(plugin)
+    }
     val craftGuiHandler: CraftGuiStorageHandler by lazy {
         if (isRedis) net.azisaba.azisync.database.handler.redis.RedisCraftGuiStorageHandler(plugin) else MySQLCraftGuiStorageHandler(plugin)
     }
@@ -100,6 +103,7 @@ class DatabaseManager(private val plugin: AziSync) {
         val enderChestTable = config.getString("database.TablesNames.enderChestTableName", "azisync_enderchest")
         val experienceTable = config.getString("database.TablesNames.experienceTableName", "azisync_experience")
         val potionTable = config.getString("database.TablesNames.potionEffectsTableName", "azisync_potioneffects")
+        val advancementTable = config.getString("database.TablesNames.advancementTableName", "azisync_advancement")
         val healthTable = config.getString("database.TablesNames.healthFoodAirTableName", "azisync_healthfoodair")
         val locationTable = config.getString("database.TablesNames.locationTableName", "azisync_location")
         val economyTable = config.getString("database.TablesNames.economyTableName", "azisync_economy")
@@ -176,6 +180,23 @@ class DatabaseManager(private val plugin: AziSync) {
                                 player_uuid CHAR(36) UNIQUE NOT NULL,
                                 player_name VARCHAR(16) $charSet NOT NULL,
                                 potion_effects TEXT NOT NULL,
+                                sync_complete VARCHAR(5) NOT NULL DEFAULT 'true',
+                                last_seen CHAR(13) NOT NULL,
+                                PRIMARY KEY(id)
+                            );
+                            """.trimIndent()
+                        )
+                    }
+
+                    // Advancements
+                    if (config.getBoolean("general.enableModules.shareAdvancement")) {
+                        statement.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS `$advancementTable` (
+                                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                player_uuid CHAR(36) UNIQUE NOT NULL,
+                                player_name VARCHAR(16) $charSet NOT NULL,
+                                advancements LONGTEXT NOT NULL,
                                 sync_complete VARCHAR(5) NOT NULL DEFAULT 'true',
                                 last_seen CHAR(13) NOT NULL,
                                 PRIMARY KEY(id)

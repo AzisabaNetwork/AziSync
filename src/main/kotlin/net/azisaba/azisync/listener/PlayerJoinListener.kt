@@ -31,7 +31,7 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
             
             // Wait until sync_complete is true
             while (waitCount < 40) {
-                val status = plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)
+                val status = plugin.syncManager.getSyncStatus(uuid)
                 if (status == null || status == "true") {
                     break
                 }

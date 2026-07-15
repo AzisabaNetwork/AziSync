@@ -1,6 +1,7 @@
 package net.azisaba.azisync.sync
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.util.AdvancementSerializer
 import net.azisaba.azisync.util.EffectSerializer
 import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
@@ -56,6 +57,10 @@ class SyncManager(private val plugin: AziSync) {
         // Potion Effects
         val sharePotionEffects = plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)
         val effectsBase64 = if (sharePotionEffects) EffectSerializer.toBase64(player.activePotionEffects) else null
+
+        // Advancements
+        val shareAdvancement = plugin.config.getBoolean("general.enableModules.shareAdvancement", false)
+        val advancementsBase64 = if (shareAdvancement) AdvancementSerializer.toBase64(player) else null
         
         // Location
         val shareLocation = plugin.config.getBoolean("general.enableModules.shareLocation", true)
@@ -125,6 +130,11 @@ class SyncManager(private val plugin: AziSync) {
                 // Save Potion Effects
                 if (sharePotionEffects && effectsBase64 != null) {
                     plugin.databaseManager.potionEffectsHandler.setData(uuid, playerName, effectsBase64, syncStatus)
+                }
+
+                // Save Advancements
+                if (shareAdvancement && advancementsBase64 != null) {
+                    plugin.databaseManager.advancementHandler.setData(uuid, playerName, advancementsBase64, syncStatus)
                 }
 
                 // Save Location
@@ -232,6 +242,17 @@ class SyncManager(private val plugin: AziSync) {
                     }
                 }
 
+                // Advancements
+                if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
+                    val advancementData = plugin.databaseManager.advancementHandler.getData(uuid, playerName)
+                    if (advancementData != null && advancementData.advancements != "none") {
+                        val advancements = AdvancementSerializer.fromBase64(advancementData.advancements)
+                        Bukkit.getScheduler().runTask(plugin, Runnable {
+                            AdvancementSerializer.apply(player, advancements)
+                        })
+                    }
+                }
+
                 // Location
                 if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
                     val locData = plugin.databaseManager.locationHandler.getData(uuid, playerName)
@@ -335,6 +356,9 @@ class SyncManager(private val plugin: AziSync) {
         if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)) {
             plugin.databaseManager.potionEffectsHandler.setSyncStatus(uuid, playerName, statusStr)
         }
+        if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
+            plugin.databaseManager.advancementHandler.setSyncStatus(uuid, playerName, statusStr)
+        }
         if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
             plugin.databaseManager.locationHandler.setSyncStatus(uuid, playerName, statusStr)
         }
@@ -344,5 +368,36 @@ class SyncManager(private val plugin: AziSync) {
         if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
             plugin.databaseManager.craftGuiHandler.setSyncStatus(uuid, playerName, statusStr)
         }
+    }
+
+    fun getSyncStatus(uuid: UUID): String? {
+        if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
+            return plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareEnderChest", true)) {
+            return plugin.databaseManager.enderchestHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareExperience", true)) {
+            return plugin.databaseManager.experienceHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareHealth", true)) {
+            return plugin.databaseManager.healthHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)) {
+            return plugin.databaseManager.potionEffectsHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
+            return plugin.databaseManager.advancementHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
+            return plugin.databaseManager.locationHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
+            return plugin.databaseManager.economyHandler.getSyncStatus(uuid)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
+            return plugin.databaseManager.craftGuiHandler.getSyncStatus(uuid)
+        }
+        return null
     }
 }
