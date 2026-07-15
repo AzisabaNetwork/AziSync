@@ -17,14 +17,15 @@ class ShopChestHook(private val plugin: AziSync) : Listener {
         }
         
         val vendor = event.shop.vendor
+        val price = event.newPrice
         
         if (event.type == ShopBuySellEvent.Type.SELL) {
             if (vendor != null && !vendor.isOnline) {
-                takeMoney(vendor.uniqueId, event.shop.sellPrice)
+                takeMoney(vendor.uniqueId, price)
             }
         } else if (event.type == ShopBuySellEvent.Type.BUY) {
             if (vendor != null && !vendor.isOnline) {
-                addMoney(vendor.uniqueId, event.shop.buyPrice)
+                addMoney(vendor.uniqueId, price)
             }
         }
     }
