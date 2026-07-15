@@ -81,8 +81,7 @@ class SyncManager(private val plugin: AziSync) {
 
         // CraftGUI
         val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
-        val craftGuiPlugin = Bukkit.getPluginManager().getPlugin("CraftGUI") as? net.azisaba.craftgui.CraftGUI
-        val craftGuiPref = if (shareCraftGui && craftGuiPlugin != null) craftGuiPlugin.api.getUserPreference(uuid) else null
+        val craftGuiPref = if (shareCraftGui) getCraftGuiPreference(uuid) else null
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
@@ -152,8 +151,12 @@ class SyncManager(private val plugin: AziSync) {
                 // Save CraftGUI
                 if (shareCraftGui && craftGuiPref != null) {
                     plugin.databaseManager.craftGuiHandler.setData(
-                        uuid, playerName, craftGuiPref.isSoundEnabled, craftGuiPref.isShowResultItems,
-                        craftGuiPref.isCraftableOnly, craftGuiPref.isStashEnabled, syncStatus
+                        uuid, playerName,
+                        getBooleanPreference(craftGuiPref, "isSoundEnabled", true),
+                        getBooleanPreference(craftGuiPref, "isShowResultItems", true),
+                        getBooleanPreference(craftGuiPref, "isCraftableOnly", false),
+                        getBooleanPreference(craftGuiPref, "isStashEnabled", false),
+                        syncStatus
                     )
                 }
                 
@@ -310,18 +313,15 @@ class SyncManager(private val plugin: AziSync) {
 
                 // CraftGUI
                 if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
-                    val craftGuiPlugin = Bukkit.getPluginManager().getPlugin("CraftGUI") as? net.azisaba.craftgui.CraftGUI
-                    if (craftGuiPlugin != null) {
-                        val craftGuiData = plugin.databaseManager.craftGuiHandler.getData(uuid, playerName)
-                        if (craftGuiData != null) {
-                            Bukkit.getScheduler().runTask(plugin, Runnable {
-                                val pref = craftGuiPlugin.api.getUserPreference(uuid)
-                                pref.setSoundEnabled(craftGuiData.soundEnabled)
-                                pref.setShowResultItems(craftGuiData.showResultItems)
-                                pref.setCraftableOnly(craftGuiData.craftableOnly)
-                                pref.setStashEnabled(craftGuiData.stashEnabled)
-                            })
-                        }
+                    val craftGuiData = plugin.databaseManager.craftGuiHandler.getData(uuid, playerName)
+                    if (craftGuiData != null) {
+                        Bukkit.getScheduler().runTask(plugin, Runnable {
+                            val pref = getCraftGuiPreference(uuid) ?: return@Runnable
+                            setBooleanPreference(pref, "setSoundEnabled", craftGuiData.soundEnabled)
+                            setBooleanPreference(pref, "setShowResultItems", craftGuiData.showResultItems)
+                            setBooleanPreference(pref, "setCraftableOnly", craftGuiData.craftableOnly)
+                            setBooleanPreference(pref, "setStashEnabled", craftGuiData.stashEnabled)
+                        })
                     }
                 }
                 
@@ -404,5 +404,53 @@ class SyncManager(private val plugin: AziSync) {
             return plugin.databaseManager.craftGuiHandler.getSyncStatus(uuid)
         }
         return null
+    }
+
+    private fun getCraftGuiPreference(uuid: UUID): Any? {
+        return try {
+            val pluginManager = Bukkit.getPluginManager()
+            if (!pluginManager.isPluginEnabled("CraftGUI")) {
+                return null
+            }
+            val craftGuiPlugin = pluginManager.getPlugin("CraftGUI") ?: return null
+            val api = craftGuiPlugin.javaClass.methods
+                .firstOrNull { it.name == "getApi" && it.parameterCount == 0 }
+                ?.invoke(craftGuiPlugin)
+                ?: return null
+
+            api.javaClass.methods
+                .firstOrNull { it.name == "getUserPreference" && it.parameterCount == 1 }
+                ?.invoke(api, uuid)
+        } catch (e: ReflectiveOperationException) {
+            plugin.logger.warning("Failed to access CraftGUI preference: ${e.message}")
+            null
+        } catch (e: LinkageError) {
+            plugin.logger.warning("Failed to access CraftGUI preference: ${e.message}")
+            null
+        }
+    }
+
+    private fun getBooleanPreference(preference: Any, methodName: String, defaultValue: Boolean): Boolean {
+        return try {
+            preference.javaClass.methods
+                .firstOrNull { it.name == methodName && it.parameterCount == 0 }
+                ?.invoke(preference) as? Boolean ?: defaultValue
+        } catch (e: ReflectiveOperationException) {
+            defaultValue
+        } catch (e: LinkageError) {
+            defaultValue
+        }
+    }
+
+    private fun setBooleanPreference(preference: Any, methodName: String, value: Boolean) {
+        try {
+            preference.javaClass.methods
+                .firstOrNull { it.name == methodName && it.parameterCount == 1 }
+                ?.invoke(preference, value)
+        } catch (e: ReflectiveOperationException) {
+            plugin.logger.warning("Failed to update CraftGUI preference $methodName: ${e.message}")
+        } catch (e: LinkageError) {
+            plugin.logger.warning("Failed to update CraftGUI preference $methodName: ${e.message}")
+        }
     }
 }
