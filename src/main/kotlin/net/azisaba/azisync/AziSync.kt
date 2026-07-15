@@ -6,6 +6,7 @@ import net.azisaba.azisync.hook.HookManager
 import net.azisaba.azisync.listener.PlayerJoinListener
 import net.azisaba.azisync.listener.PlayerProtectListener
 import net.azisaba.azisync.listener.PlayerQuitListener
+import net.azisaba.azisync.manager.InvseeManager
 import net.azisaba.azisync.sync.SyncManager
 import net.azisaba.azisync.task.DataSaveTask
 import net.azisaba.azisync.util.MessageManager
@@ -26,12 +27,16 @@ class AziSync : JavaPlugin() {
     lateinit var hookManager: HookManager
         private set
 
+    lateinit var invseeManager: InvseeManager
+        private set
+
     override fun onEnable() {
         saveDefaultConfig()
         
         databaseManager = DatabaseManager(this)
         syncManager = SyncManager(this)
         messageManager = MessageManager(this)
+        invseeManager = InvseeManager(this)
         
 
         DataSaveTask(this).start()
