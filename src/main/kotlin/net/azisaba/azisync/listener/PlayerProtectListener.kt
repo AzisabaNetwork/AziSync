@@ -20,12 +20,19 @@ import java.util.concurrent.ConcurrentHashMap
 class PlayerProtectListener(private val plugin: AziSync) : Listener {
 
     private val messageCooldown = ConcurrentHashMap<UUID, Long>()
+    private val soundCooldown = ConcurrentHashMap<UUID, Long>()
 
     private fun handleBlock(player: Player, event: org.bukkit.event.Cancellable) {
         if (!plugin.syncManager.isLoaded(player)) {
             event.isCancelled = true
             
             val now = System.currentTimeMillis()
+            val lastSoundTime = soundCooldown[player.uniqueId] ?: 0L
+            if (!plugin.config.getBoolean("general.disableSounds", false) && now - lastSoundTime > 500) {
+                player.playSound(player.location, org.bukkit.Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f)
+                soundCooldown[player.uniqueId] = now
+            }
+
             val lastTime = messageCooldown[player.uniqueId] ?: 0L
             if (now - lastTime > 3000) {
                 plugin.messageManager.sendMessage(player, "action_blocked_loading")

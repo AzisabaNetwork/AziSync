@@ -20,7 +20,9 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
                     this.cancel()
                     return
                 }
-                p.playSound(p.location, org.bukkit.Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f)
+                if (!plugin.config.getBoolean("general.disableSounds", false)) {
+                    p.playSound(p.location, org.bukkit.Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f)
+                }
                 count++
             }
         }.runTaskTimer(plugin, 0L, 20L)

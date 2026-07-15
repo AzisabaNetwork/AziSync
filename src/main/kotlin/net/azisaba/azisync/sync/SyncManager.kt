@@ -168,6 +168,9 @@ class SyncManager(private val plugin: AziSync) {
     fun loadData(player: Player) {
         val uuid = player.uniqueId
         val playerName = player.name
+        if (!plugin.config.getBoolean("general.disableSounds", false)) {
+            player.playSound(player.location, org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f)
+        }
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
                 // Inventory
@@ -324,7 +327,9 @@ class SyncManager(private val plugin: AziSync) {
                 
                 loadedPlayers[player.uniqueId] = true
                 Bukkit.getScheduler().runTask(plugin, Runnable {
-                    player.playSound(player.location, org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f)
+                    if (!plugin.config.getBoolean("general.disableSounds", false)) {
+                        player.playSound(player.location, org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f)
+                    }
                     plugin.messageManager.sendMessage(player, "sync_complete")
                 })
                 plugin.logger.info("Successfully loaded data for ${player.name}")
