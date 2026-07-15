@@ -7,6 +7,7 @@ import org.bukkit.configuration.file.YamlConfiguration
 import org.bukkit.entity.Player
 import java.io.File
 import java.io.InputStreamReader
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 
 class MessageManager(private val plugin: AziSync) {
@@ -36,11 +37,31 @@ class MessageManager(private val plugin: AziSync) {
             }
             if (file.exists()) {
                 val config = YamlConfiguration.loadConfiguration(file)
+                addMissingKeys(fileName, file, config)
                 val nameWithoutExt = fileName.replace(".yml", "")
                 langCache[nameWithoutExt] = config
             }
         }
         plugin.logger.info("Loaded ${langCache.size} language files.")
+    }
+
+    private fun addMissingKeys(fileName: String, file: File, config: YamlConfiguration) {
+        val resource = plugin.getResource("messages/$fileName") ?: return
+        val defaults = InputStreamReader(resource, StandardCharsets.UTF_8).use {
+            YamlConfiguration.loadConfiguration(it)
+        }
+
+        var changed = false
+        for (key in defaults.getKeys(true)) {
+            if (!defaults.isConfigurationSection(key) && !config.contains(key)) {
+                config.set(key, defaults.get(key))
+                changed = true
+            }
+        }
+
+        if (changed) {
+            config.save(file)
+        }
     }
 
     private fun getLocale(sender: CommandSender): String {
