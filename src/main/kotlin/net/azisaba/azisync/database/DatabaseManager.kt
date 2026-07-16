@@ -30,6 +30,9 @@ class DatabaseManager(private val plugin: AziSync) {
 
     init {
         setupPool()
+        if (!isAvailable()) {
+            throw SQLException("Failed to initialize MySQL DataSource")
+        }
         createTables()
 
         if (storageMode == StorageMode.HYBRID) {
@@ -90,7 +93,15 @@ class DatabaseManager(private val plugin: AziSync) {
     }
 
     fun getConnection(): Connection {
-        return dataSource?.connection ?: throw SQLException("DataSource is null or not initialized")
+        val source = dataSource
+        if (source == null || source.isClosed) {
+            throw SQLException("DataSource is null, closed, or not initialized")
+        }
+        return source.connection
+    }
+
+    fun isAvailable(): Boolean {
+        return dataSource?.let { !it.isClosed } == true
     }
 
     fun close() {
@@ -98,6 +109,7 @@ class DatabaseManager(private val plugin: AziSync) {
         if (dataSource != null && !dataSource!!.isClosed) {
             dataSource!!.close()
         }
+        dataSource = null
     }
 
     private fun createTables() {

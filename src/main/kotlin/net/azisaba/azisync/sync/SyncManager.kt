@@ -20,7 +20,24 @@ class SyncManager(private val plugin: AziSync) {
         return loadedPlayers[player.uniqueId] ?: false
     }
 
+    fun markLoaded(player: Player) {
+        loadedPlayers[player.uniqueId] = true
+    }
+
     fun saveData(player: Player, syncComplete: Boolean = false) {
+        saveData(player, syncComplete, runAsync = true)
+    }
+
+    fun saveDataNow(player: Player, syncComplete: Boolean = false) {
+        saveData(player, syncComplete, runAsync = false)
+    }
+
+    private fun saveData(player: Player, syncComplete: Boolean, runAsync: Boolean) {
+        if (!plugin.databaseManager.isAvailable()) {
+            plugin.logger.warning("Skipping save for ${player.name}: database is not available.")
+            return
+        }
+
         val uuid = player.uniqueId
         val playerName = player.name
         val syncStatus = if (syncComplete) "true" else "false"
@@ -84,12 +101,17 @@ class SyncManager(private val plugin: AziSync) {
         val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
         val craftGuiPref = if (shareCraftGui) getCraftGuiPreference(uuid) else null
 
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
+        if (syncComplete) {
+            prepareSyncStatusRows(uuid, playerName)
+            setSyncStatus(uuid, playerName, false)
+        }
+
+        val saveTask = Runnable {
             try {
-                if (syncComplete) {
-                    setSyncStatus(uuid, playerName, false)
+                if (!plugin.databaseManager.isAvailable()) {
+                    return@Runnable
                 }
-                
+
                 var waitCount = 0
                 while (plugin.hookManager.jobsHook.isPlayerSaving(uuid) && waitCount < 20) {
                     Thread.sleep(250)
@@ -170,10 +192,21 @@ class SyncManager(private val plugin: AziSync) {
                 plugin.logger.severe("Failed to save data for $playerName: ${e.message}")
                 e.printStackTrace()
             }
-        })
+        }
+
+        if (runAsync && plugin.isEnabled) {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, saveTask)
+        } else {
+            saveTask.run()
+        }
     }
 
     fun loadData(player: Player) {
+        if (!plugin.databaseManager.isAvailable()) {
+            plugin.logger.warning("Skipping load for ${player.name}: database is not available.")
+            return
+        }
+
         val uuid = player.uniqueId
         val playerName = player.name
         if (!plugin.config.getBoolean("general.disableSounds", false)) {
@@ -181,6 +214,10 @@ class SyncManager(private val plugin: AziSync) {
         }
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
+                if (!plugin.databaseManager.isAvailable()) {
+                    return@Runnable
+                }
+
                 // Inventory
                 if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
                     val invData = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
@@ -387,34 +424,80 @@ class SyncManager(private val plugin: AziSync) {
         if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
             plugin.databaseManager.redisManager?.getSyncStatus(uuid)?.let { return it }
         }
+
+        val statuses = mutableListOf<String>()
         if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
-            return plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)
+            plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareEnderChest", true)) {
-            return plugin.databaseManager.enderchestHandler.getSyncStatus(uuid)
+            plugin.databaseManager.enderchestHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareExperience", true)) {
-            return plugin.databaseManager.experienceHandler.getSyncStatus(uuid)
+            plugin.databaseManager.experienceHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareHealth", true)) {
-            return plugin.databaseManager.healthHandler.getSyncStatus(uuid)
+            plugin.databaseManager.healthHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)) {
-            return plugin.databaseManager.potionEffectsHandler.getSyncStatus(uuid)
+            plugin.databaseManager.potionEffectsHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
-            return plugin.databaseManager.advancementHandler.getSyncStatus(uuid)
+            plugin.databaseManager.advancementHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
-            return plugin.databaseManager.locationHandler.getSyncStatus(uuid)
+            plugin.databaseManager.locationHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
-            return plugin.databaseManager.economyHandler.getSyncStatus(uuid)
+            plugin.databaseManager.economyHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
         if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
-            return plugin.databaseManager.craftGuiHandler.getSyncStatus(uuid)
+            plugin.databaseManager.craftGuiHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
         }
-        return null
+
+        return when {
+            statuses.any { it.equals("false", ignoreCase = true) } -> "false"
+            statuses.any { it.equals("true", ignoreCase = true) } -> "true"
+            else -> null
+        }
+    }
+
+    private fun prepareSyncStatusRows(uuid: UUID, playerName: String) {
+        if (plugin.config.getBoolean("general.enableModules.shareInventory", true) &&
+            !plugin.databaseManager.inventoryHandler.hasAccount(uuid)) {
+            plugin.databaseManager.inventoryHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareEnderChest", true) &&
+            !plugin.databaseManager.enderchestHandler.hasAccount(uuid)) {
+            plugin.databaseManager.enderchestHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareExperience", true) &&
+            !plugin.databaseManager.experienceHandler.hasAccount(uuid)) {
+            plugin.databaseManager.experienceHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareHealth", true) &&
+            !plugin.databaseManager.healthHandler.hasAccount(uuid)) {
+            plugin.databaseManager.healthHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true) &&
+            !plugin.databaseManager.potionEffectsHandler.hasAccount(uuid)) {
+            plugin.databaseManager.potionEffectsHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false) &&
+            !plugin.databaseManager.advancementHandler.hasAccount(uuid)) {
+            plugin.databaseManager.advancementHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareLocation", true) &&
+            !plugin.databaseManager.locationHandler.hasAccount(uuid)) {
+            plugin.databaseManager.locationHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareEconomy", true) &&
+            !plugin.databaseManager.economyHandler.hasAccount(uuid)) {
+            plugin.databaseManager.economyHandler.createAccount(uuid, playerName)
+        }
+        if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false) &&
+            !plugin.databaseManager.craftGuiHandler.hasAccount(uuid)) {
+            plugin.databaseManager.craftGuiHandler.createAccount(uuid, playerName)
+        }
     }
 
     private fun getCraftGuiPreference(uuid: UUID): Any? {

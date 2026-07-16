@@ -1,6 +1,8 @@
 package net.azisaba.azisync.database
 
 import net.azisaba.azisync.AziSync
+import redis.clients.jedis.DefaultJedisClientConfig
+import redis.clients.jedis.HostAndPort
 import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.JedisPoolConfig
@@ -17,6 +19,7 @@ class RedisManager(private val plugin: AziSync) {
         val config = plugin.config
         val host = config.getString("redis.host", "localhost")!!
         val port = config.getInt("redis.port", 6379)
+        val username = config.getString("redis.username", "")!!
         val password = config.getString("redis.password", "")!!
         val timeout = config.getInt("redis.timeout", 2000)
 
@@ -29,7 +32,17 @@ class RedisManager(private val plugin: AziSync) {
 
         try {
             jedisPool = if (password.isNotEmpty()) {
-                JedisPool(poolConfig, host, port, timeout, password)
+                val clientConfig = DefaultJedisClientConfig.builder()
+                    .timeoutMillis(timeout)
+                    .socketTimeoutMillis(timeout)
+                    .password(password)
+                    .apply {
+                        if (username.isNotEmpty()) {
+                            user(username)
+                        }
+                    }
+                    .build()
+                JedisPool(poolConfig, HostAndPort(host, port), clientConfig)
             } else {
                 JedisPool(poolConfig, host, port, timeout)
             }

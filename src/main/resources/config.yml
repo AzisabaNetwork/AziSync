@@ -13,6 +13,7 @@ storage:
 redis:
   host: localhost
   port: 6379
+  username: ""
   password: ""
   timeout: 2000
 
@@ -66,6 +67,8 @@ general:
   disableSounds: false
   disableCreativeItemShare: false
   kickOnFailedSync: false
+  # Delay loading synced data after join so other join handlers can finish first.
+  loadDelayTicks: 5
   locationSyncOptions:
     onlineTimeToSaveLocation: 0
 

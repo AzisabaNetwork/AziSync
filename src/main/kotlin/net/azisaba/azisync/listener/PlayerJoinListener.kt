@@ -12,6 +12,7 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
     @EventHandler(priority = EventPriority.HIGH)
     fun onPlayerJoin(event: PlayerJoinEvent) {
         val uuid = event.player.uniqueId
+        val loadDelayTicks = plugin.config.getLong("general.loadDelayTicks", 5L).coerceAtLeast(0L)
         object : org.bukkit.scheduler.BukkitRunnable() {
             var count = 0
             override fun run() {
@@ -30,6 +31,9 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
             
             // Wait until sync_complete is true
             while (waitCount < 40) {
+                if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
+                    return@Runnable
+                }
                 val status = plugin.syncManager.getSyncStatus(uuid)
                 if (status == null || status == "true") {
                     break
@@ -49,7 +53,15 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
             }
             
             if (player.isOnline) {
-                plugin.syncManager.loadData(player)
+                Bukkit.getScheduler().runTaskLater(plugin, Runnable {
+                    if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
+                        return@Runnable
+                    }
+                    val delayedPlayer = Bukkit.getPlayer(uuid) ?: return@Runnable
+                    if (delayedPlayer.isOnline && !plugin.syncManager.isLoaded(delayedPlayer)) {
+                        plugin.syncManager.loadData(delayedPlayer)
+                    }
+                }, loadDelayTicks)
             }
         })
     }

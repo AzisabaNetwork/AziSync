@@ -32,8 +32,16 @@ class AziSync : JavaPlugin() {
 
     override fun onEnable() {
         saveDefaultConfig()
-        
-        databaseManager = DatabaseManager(this)
+
+        try {
+            databaseManager = DatabaseManager(this)
+        } catch (e: Exception) {
+            logger.severe("Failed to initialize database. Disabling AziSync.")
+            e.printStackTrace()
+            server.pluginManager.disablePlugin(this)
+            return
+        }
+
         syncManager = SyncManager(this)
         messageManager = MessageManager(this)
         invseeManager = InvseeManager(this)
@@ -53,13 +61,22 @@ class AziSync : JavaPlugin() {
             setExecutor(commandExecutor)
             tabCompleter = commandExecutor
         }
+
+        server.onlinePlayers.forEach {
+            syncManager.markLoaded(it)
+        }
+
         logger.info("AziSync has been enabled.")
     }
 
     override fun onDisable() {
-        server.onlinePlayers.forEach {
-            syncManager.saveData(it, true)
+        if (::syncManager.isInitialized) {
+            server.onlinePlayers.forEach {
+                syncManager.saveDataNow(it, true)
+            }
         }
+
+        server.scheduler.cancelTasks(this)
         
         if (::databaseManager.isInitialized) {
             databaseManager.close()
