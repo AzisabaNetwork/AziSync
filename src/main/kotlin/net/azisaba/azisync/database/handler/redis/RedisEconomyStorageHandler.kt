@@ -58,6 +58,19 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         return true
     }
 
+    override fun addOfflineMoney(uuid: UUID, amount: Double): Boolean {
+        plugin.databaseManager.redisManager?.getResource()?.use { it.hincrByFloat("$prefix$uuid", "offline_money", amount) }
+        return true
+    }
+
+    override fun consumeOfflineMoney(uuid: UUID): Double? {
+        return plugin.databaseManager.redisManager?.getResource()?.use {
+            val amount = it.hget("$prefix$uuid", "offline_money")?.toDoubleOrNull() ?: return@use null
+            it.hset("$prefix$uuid", "offline_money", "0.0")
+            amount
+        }
+    }
+
     override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         plugin.databaseManager.redisManager?.getResource()?.use { 
             it.hset("$prefix$uuid", "sync_complete", status)

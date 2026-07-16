@@ -5,19 +5,19 @@ import org.bukkit.Bukkit
 
 class DataSaveTask(private val plugin: AziSync) : Runnable {
     
-    private val interval = plugin.config.getLong("general.saveDataTask.interval", 5) * 60 * 20L
+    private val interval = plugin.config.getLong("general.saveDataTask.interval", 300).coerceAtLeast(1L) * 20L
 
     fun start() {
         if (plugin.config.getBoolean("general.saveDataTask.enabled", true)) {
-            Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this, interval, interval)
-            plugin.logger.info("DataSaveTask started with interval: ${interval / 20 / 60} minutes.")
+            Bukkit.getScheduler().runTaskTimer(plugin, this, interval, interval)
+            plugin.logger.info("DataSaveTask started with interval: ${interval / 20} seconds.")
         } else {
             plugin.logger.info("DataSaveTask is disabled.")
         }
     }
 
     override fun run() {
-        val hideLog = plugin.config.getBoolean("general.saveDataTask.hideLogMessages", false)
+        val hideLog = plugin.config.getBoolean("general.saveDataTask.hideLogMessage", false)
         val players = Bukkit.getOnlinePlayers()
         
         if (players.isNotEmpty()) {

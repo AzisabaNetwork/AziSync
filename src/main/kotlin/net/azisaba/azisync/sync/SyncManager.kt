@@ -11,10 +11,18 @@ import org.bukkit.Location
 import org.bukkit.entity.Player
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class SyncManager(private val plugin: AziSync) {
     
     private val loadedPlayers = ConcurrentHashMap<UUID, Boolean>()
+    private val saveChains = ConcurrentHashMap<UUID, CompletableFuture<Void>>()
+    private val databaseExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
+        Thread(runnable, "AziSync-Database").apply { isDaemon = true }
+    }
 
     fun isLoaded(player: Player): Boolean {
         return loadedPlayers[player.uniqueId] ?: false
@@ -25,14 +33,21 @@ class SyncManager(private val plugin: AziSync) {
     }
 
     fun saveData(player: Player, syncComplete: Boolean = false) {
-        saveData(player, syncComplete, runAsync = true)
+        saveData(player, syncComplete, allowDisabledPlugin = false)
     }
 
     fun saveDataNow(player: Player, syncComplete: Boolean = false) {
-        saveData(player, syncComplete, runAsync = false)
+        saveData(player, syncComplete, allowDisabledPlugin = true)
     }
 
-    private fun saveData(player: Player, syncComplete: Boolean, runAsync: Boolean) {
+    private fun saveData(player: Player, syncComplete: Boolean, allowDisabledPlugin: Boolean) {
+        if (!Bukkit.isPrimaryThread()) {
+            if (plugin.isEnabled) {
+                Bukkit.getScheduler().runTask(plugin, Runnable { saveData(player, syncComplete, allowDisabledPlugin) })
+            }
+            return
+        }
+        if (!allowDisabledPlugin && !plugin.isEnabled) return
         if (!plugin.databaseManager.isAvailable()) {
             plugin.logger.warning("Skipping save for ${player.name}: database is not available.")
             return
@@ -40,15 +55,18 @@ class SyncManager(private val plugin: AziSync) {
 
         val uuid = player.uniqueId
         val playerName = player.name
-        val syncStatus = if (syncComplete) "true" else "false"
+        val syncStatus = "true"
 
         // Inventory
-        val shareInventory = plugin.config.getBoolean("general.enableModules.shareInventory", true)
+        val creativeInventoryDisabled = plugin.config.getBoolean("general.disableCreativeItemShare", false) && player.gameMode == GameMode.CREATIVE
+        val shareInventory = plugin.config.getBoolean("general.enableModules.shareInventory", true) && !creativeInventoryDisabled
+        val shareArmor = plugin.config.getBoolean("general.enableModules.shareArmor", false) && !creativeInventoryDisabled
+        val shareGameMode = plugin.config.getBoolean("general.enableModules.shareGameMode", false)
         val inventoryBase64 = if (shareInventory) ItemSerializer.toBase64(player.inventory.contents) else null
-        val armorBase64 = if (shareInventory) ItemSerializer.toBase64(player.inventory.armorContents) else null
+        val armorBase64 = if (shareArmor) ItemSerializer.toBase64(player.inventory.armorContents) else null
         val heldItemSlot = if (shareInventory) player.inventory.heldItemSlot else 0
         @Suppress("DEPRECATION")
-        val gameModeValue = if (shareInventory) player.gameMode.value else 0
+        val gameModeValue = if (shareGameMode) player.gameMode.value else 0
         
         // EnderChest
         val shareEnderChest = plugin.config.getBoolean("general.enableModules.shareEnderChest", true)
@@ -63,14 +81,16 @@ class SyncManager(private val plugin: AziSync) {
         
         // Health/Food/Air
         val shareHealth = plugin.config.getBoolean("general.enableModules.shareHealth", true)
-        val health = if (shareHealth) player.health else 20.0
-        val healthScale = if (shareHealth) player.healthScale else 20.0
+        val shareFood = plugin.config.getBoolean("general.enableModules.shareFood", false)
+        val shareAir = plugin.config.getBoolean("general.enableModules.shareAir", false)
+        val health = if (shareHealth) player.health else null
+        val healthScale = if (shareHealth) player.healthScale else null
         @Suppress("DEPRECATION")
-        val maxHealth = if (shareHealth) player.maxHealth else 20.0
-        val foodLevel = if (shareHealth) player.foodLevel else 20
-        val saturation = if (shareHealth) player.saturation.toString() else "5.0"
-        val remainingAir = if (shareHealth) player.remainingAir else 300
-        val maximumAir = if (shareHealth) player.maximumAir else 300
+        val maxHealth = if (shareHealth) player.maxHealth else null
+        val foodLevel = if (shareFood) player.foodLevel else null
+        val saturation = if (shareFood) player.saturation.toString() else null
+        val remainingAir = if (shareAir) player.remainingAir else null
+        val maximumAir = if (shareAir) player.maximumAir else null
         
         // Potion Effects
         val sharePotionEffects = plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)
@@ -82,15 +102,17 @@ class SyncManager(private val plugin: AziSync) {
         
         // Location
         val shareLocation = plugin.config.getBoolean("general.enableModules.shareLocation", true)
-        val locWorld = if (shareLocation) player.location.world?.name ?: "world" else "world"
-        val locX = if (shareLocation) player.location.x else 0.0
-        val locY = if (shareLocation) player.location.y else 0.0
-        val locZ = if (shareLocation) player.location.z else 0.0
-        val locYaw = if (shareLocation) player.location.yaw else 0f
-        val locPitch = if (shareLocation) player.location.pitch else 0f
-        val bedSpawn = if (shareLocation) {
+        val shareBedSpawn = plugin.config.getBoolean("general.enableModules.shareBedSpawn", false)
+        val location = if (shareLocation) player.location else null
+        val locWorld = location?.world?.name
+        val locX = location?.x
+        val locY = location?.y
+        val locZ = location?.z
+        val locYaw = location?.yaw
+        val locPitch = location?.pitch
+        val bedSpawn = if (shareBedSpawn) {
             player.bedSpawnLocation?.let { "${it.world?.name},${it.x},${it.y},${it.z}" } ?: "none"
-        } else "none"
+        } else null
         
         // Economy
         val shareEconomy = plugin.config.getBoolean("general.enableModules.shareEconomy", true)
@@ -101,19 +123,20 @@ class SyncManager(private val plugin: AziSync) {
         val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
         val craftGuiPref = if (shareCraftGui) getCraftGuiPreference(uuid) else null
 
-        if (syncComplete) {
-            prepareSyncStatusRows(uuid, playerName)
-            setSyncStatus(uuid, playerName, false)
-        }
-
         val saveTask = Runnable {
             try {
                 if (!plugin.databaseManager.isAvailable()) {
                     return@Runnable
                 }
 
+                val syncVersion = if (syncComplete) {
+                    plugin.databaseManager.beginSync(uuid, playerName)
+                } else {
+                    null
+                }
+
                 var waitCount = 0
-                while (plugin.hookManager.jobsHook.isPlayerSaving(uuid) && waitCount < 20) {
+                while (syncComplete && plugin.hookManager.jobsHook.isPlayerSaving(uuid) && waitCount < 20) {
                     Thread.sleep(250)
                     waitCount++
                 }
@@ -124,9 +147,15 @@ class SyncManager(private val plugin: AziSync) {
                 }
 
                 // Save Inventory
-                if (shareInventory && inventoryBase64 != null && armorBase64 != null) {
+                if (shareInventory || shareArmor || shareGameMode) {
+                    val current = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
                     plugin.databaseManager.inventoryHandler.setData(
-                        uuid, playerName, inventoryBase64, armorBase64, heldItemSlot, gameModeValue, syncStatus
+                        uuid, playerName,
+                        inventoryBase64 ?: current?.inventory ?: "none",
+                        armorBase64 ?: current?.armor ?: "none",
+                        if (shareInventory) heldItemSlot else current?.hotbarSlot ?: 0,
+                        if (shareGameMode) gameModeValue else current?.gamemode ?: 0,
+                        syncStatus
                     )
                 }
 
@@ -143,9 +172,18 @@ class SyncManager(private val plugin: AziSync) {
                 }
 
                 // Save Health/Food/Air
-                if (shareHealth) {
+                if (shareHealth || shareFood || shareAir) {
+                    val current = plugin.databaseManager.healthHandler.getData(uuid, playerName)
                     plugin.databaseManager.healthHandler.setData(
-                        uuid, playerName, health, healthScale, maxHealth, foodLevel, saturation, remainingAir, maximumAir, syncStatus
+                        uuid, playerName,
+                        health ?: current?.health ?: 20.0,
+                        healthScale ?: current?.healthScale ?: 20.0,
+                        maxHealth ?: current?.maxHealth ?: 20.0,
+                        foodLevel ?: current?.food ?: 20,
+                        saturation ?: current?.saturation ?: "5.0",
+                        remainingAir ?: current?.air ?: 300,
+                        maximumAir ?: current?.maxAir ?: 300,
+                        syncStatus
                     )
                 }
 
@@ -160,9 +198,18 @@ class SyncManager(private val plugin: AziSync) {
                 }
 
                 // Save Location
-                if (shareLocation) {
+                if (shareLocation || shareBedSpawn) {
+                    val current = plugin.databaseManager.locationHandler.getData(uuid, playerName)
                     plugin.databaseManager.locationHandler.setData(
-                        uuid, playerName, locWorld, locX, locY, locZ, locYaw, locPitch, bedSpawn, syncStatus
+                        uuid, playerName,
+                        locWorld ?: current?.world ?: "world",
+                        locX ?: current?.x ?: 0.0,
+                        locY ?: current?.y ?: 0.0,
+                        locZ ?: current?.z ?: 0.0,
+                        locYaw ?: current?.yaw ?: 0f,
+                        locPitch ?: current?.pitch ?: 0f,
+                        bedSpawn ?: current?.bedSpawn ?: "none",
+                        syncStatus
                     )
                 }
 
@@ -183,8 +230,13 @@ class SyncManager(private val plugin: AziSync) {
                     )
                 }
 
-                if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
-                    plugin.databaseManager.redisManager?.setSyncStatus(uuid, syncStatus)
+                if (syncVersion != null) {
+                    if (!plugin.databaseManager.completeSync(uuid, syncVersion)) {
+                        plugin.logger.warning("Skipped stale sync completion for $playerName")
+                    }
+                    if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+                        plugin.databaseManager.redisManager?.setSyncStatus(uuid, "true")
+                    }
                 }
                 
                 plugin.logger.info("Successfully saved data for $playerName")
@@ -194,12 +246,38 @@ class SyncManager(private val plugin: AziSync) {
             }
         }
 
-        if (runAsync && plugin.isEnabled) {
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, saveTask)
-        } else {
-            saveTask.run()
+        enqueueSave(uuid, saveTask)
+    }
+
+    private fun enqueueSave(uuid: UUID, task: Runnable) {
+        val next = saveChains.compute(uuid) { _, previous ->
+            (previous ?: CompletableFuture.completedFuture(null))
+                .handle { _, _ -> null }
+                .thenRunAsync(task, databaseExecutor)
+        }!!
+        next.whenComplete { _, _ -> saveChains.remove(uuid, next) }
+    }
+
+    fun flushPendingSaves(timeoutSeconds: Long): Boolean {
+        val pending = saveChains.values.toTypedArray()
+        if (pending.isEmpty()) return true
+        return try {
+            CompletableFuture.allOf(*pending).get(timeoutSeconds, TimeUnit.SECONDS)
+            true
+        } catch (e: Exception) {
+            plugin.logger.warning("Timed out while waiting for pending AziSync saves: ${e.message}")
+            false
         }
     }
+
+    fun shutdown() {
+        databaseExecutor.shutdown()
+        if (!databaseExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            databaseExecutor.shutdownNow()
+        }
+    }
+
+    fun isShutdown(): Boolean = databaseExecutor.isShutdown
 
     fun loadData(player: Player) {
         if (!plugin.databaseManager.isAvailable()) {
@@ -209,30 +287,40 @@ class SyncManager(private val plugin: AziSync) {
 
         val uuid = player.uniqueId
         val playerName = player.name
+        val creativeInventoryDisabled = plugin.config.getBoolean("general.disableCreativeItemShare", false) && player.gameMode == GameMode.CREATIVE
+        val loadInventory = plugin.config.getBoolean("general.enableModules.shareInventory", true) && !creativeInventoryDisabled
+        val loadArmor = plugin.config.getBoolean("general.enableModules.shareArmor", false) && !creativeInventoryDisabled
+        val loadGameMode = plugin.config.getBoolean("general.enableModules.shareGameMode", false)
+        val loadHealth = plugin.config.getBoolean("general.enableModules.shareHealth", true)
+        val loadFood = plugin.config.getBoolean("general.enableModules.shareFood", false)
+        val loadAir = plugin.config.getBoolean("general.enableModules.shareAir", false)
+        val loadLocation = plugin.config.getBoolean("general.enableModules.shareLocation", true)
+        val loadBedSpawn = plugin.config.getBoolean("general.enableModules.shareBedSpawn", false)
         if (!plugin.config.getBoolean("general.disableSounds", false)) {
             player.playSound(player.location, org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f)
         }
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
+        databaseExecutor.execute {
             try {
                 if (!plugin.databaseManager.isAvailable()) {
-                    return@Runnable
+                    return@execute
                 }
 
                 // Inventory
-                if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
+                if (loadInventory || loadArmor || loadGameMode) {
                     val invData = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
-                    if (invData != null && invData.inventory != "none") {
-                        val contents = ItemSerializer.fromBase64(invData.inventory)
-                        val armor = ItemSerializer.fromBase64(invData.armor)
+                    if (invData != null) {
+                        val contents = if (loadInventory && invData.inventory != "none") ItemSerializer.fromBase64(invData.inventory) else null
+                        val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor) else null
                         
                         Bukkit.getScheduler().runTask(plugin, Runnable {
-                            player.inventory.contents = contents
-                            player.inventory.setArmorContents(armor)
-                            player.inventory.heldItemSlot = invData.hotbarSlot
-                            
-                            val gm = GameMode.getByValue(invData.gamemode)
-                            if (gm != null) {
-                                player.gameMode = gm
+                            if (contents != null) {
+                                player.inventory.contents = contents
+                                player.inventory.heldItemSlot = invData.hotbarSlot
+                            }
+                            if (armor != null) player.inventory.setArmorContents(armor)
+                            if (loadGameMode) {
+                                val gm = GameMode.getByValue(invData.gamemode)
+                                if (gm != null) player.gameMode = gm
                             }
                         })
                     }
@@ -262,18 +350,24 @@ class SyncManager(private val plugin: AziSync) {
                 }
 
                 // Health/Food/Air
-                if (plugin.config.getBoolean("general.enableModules.shareHealth", true)) {
+                if (loadHealth || loadFood || loadAir) {
                     val healthData = plugin.databaseManager.healthHandler.getData(uuid, playerName)
                     if (healthData != null) {
                         Bukkit.getScheduler().runTask(plugin, Runnable {
-                            @Suppress("DEPRECATION")
-                            player.maxHealth = healthData.maxHealth
-                            player.healthScale = healthData.healthScale
-                            player.health = healthData.health.coerceIn(0.0, healthData.maxHealth)
-                            player.foodLevel = healthData.food
-                            player.saturation = healthData.saturation.toFloatOrNull() ?: 5.0f
-                            player.maximumAir = healthData.maxAir
-                            player.remainingAir = healthData.air
+                            if (loadHealth) {
+                                @Suppress("DEPRECATION")
+                                player.maxHealth = healthData.maxHealth
+                                player.healthScale = healthData.healthScale
+                                player.health = healthData.health.coerceIn(0.0, healthData.maxHealth)
+                            }
+                            if (loadFood) {
+                                player.foodLevel = healthData.food
+                                player.saturation = healthData.saturation.toFloatOrNull() ?: 5.0f
+                            }
+                            if (loadAir) {
+                                player.maximumAir = healthData.maxAir
+                                player.remainingAir = healthData.air
+                            }
                         })
                     }
                 }
@@ -302,15 +396,17 @@ class SyncManager(private val plugin: AziSync) {
                 }
 
                 // Location
-                if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
+                if (loadLocation || loadBedSpawn) {
                     val locData = plugin.databaseManager.locationHandler.getData(uuid, playerName)
                     if (locData != null) {
                         Bukkit.getScheduler().runTask(plugin, Runnable {
-                            val world = Bukkit.getWorld(locData.world)
-                            if (world != null) {
-                                player.teleport(Location(world, locData.x, locData.y, locData.z, locData.yaw, locData.pitch))
+                            if (loadLocation) {
+                                val world = Bukkit.getWorld(locData.world)
+                                if (world != null) {
+                                    player.teleport(Location(world, locData.x, locData.y, locData.z, locData.yaw, locData.pitch))
+                                }
                             }
-                            if (locData.bedSpawn != "none") {
+                            if (loadBedSpawn && locData.bedSpawn != "none") {
                                 val split = locData.bedSpawn.split(",")
                                 if (split.size == 4) {
                                     val bedWorld = Bukkit.getWorld(split[0])
@@ -329,15 +425,14 @@ class SyncManager(private val plugin: AziSync) {
                     if (econ != null) {
                         val econData = plugin.databaseManager.economyHandler.getData(uuid, playerName)
                         if (econData != null) {
+                            val offlineMoney = plugin.databaseManager.economyHandler.consumeOfflineMoney(uuid) ?: 0.0
                             Bukkit.getScheduler().runTask(plugin, Runnable {
-                                val offlineMoney = econData.offlineMoney
                                 if (offlineMoney != 0.0) {
                                     if (offlineMoney > 0) {
                                         econ.depositPlayer(player, offlineMoney)
                                     } else {
                                         econ.withdrawPlayer(player, -offlineMoney)
                                     }
-                                    plugin.databaseManager.economyHandler.setOfflineMoney(player.uniqueId, 0.0)
                                     plugin.logger.info("Applied offline economy changes for ${player.name}: $offlineMoney")
                                 }
 
@@ -367,11 +462,12 @@ class SyncManager(private val plugin: AziSync) {
                     }
                 }
                 
-                loadedPlayers[player.uniqueId] = true
                 Bukkit.getScheduler().runTask(plugin, Runnable {
+                    if (!player.isOnline) return@Runnable
                     if (!plugin.config.getBoolean("general.disableSounds", false)) {
                         player.playSound(player.location, org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f)
                     }
+                    loadedPlayers[player.uniqueId] = true
                     plugin.messageManager.sendMessage(player, "sync_complete")
                 })
                 plugin.logger.info("Successfully loaded data for ${player.name}")
@@ -379,7 +475,7 @@ class SyncManager(private val plugin: AziSync) {
                 plugin.logger.severe("Failed to load data for ${player.name}: ${e.message}")
                 e.printStackTrace()
             }
-        })
+        }
     }
     
     fun removeLoadedStatus(uuid: UUID) {
@@ -421,44 +517,7 @@ class SyncManager(private val plugin: AziSync) {
     }
 
     fun getSyncStatus(uuid: UUID): String? {
-        if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
-            plugin.databaseManager.redisManager?.getSyncStatus(uuid)?.let { return it }
-        }
-
-        val statuses = mutableListOf<String>()
-        if (plugin.config.getBoolean("general.enableModules.shareInventory", true)) {
-            plugin.databaseManager.inventoryHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareEnderChest", true)) {
-            plugin.databaseManager.enderchestHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareExperience", true)) {
-            plugin.databaseManager.experienceHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareHealth", true)) {
-            plugin.databaseManager.healthHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)) {
-            plugin.databaseManager.potionEffectsHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
-            plugin.databaseManager.advancementHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareLocation", true)) {
-            plugin.databaseManager.locationHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
-            plugin.databaseManager.economyHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-        if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
-            plugin.databaseManager.craftGuiHandler.getSyncStatus(uuid)?.let { statuses.add(it) }
-        }
-
-        return when {
-            statuses.any { it.equals("false", ignoreCase = true) } -> "false"
-            statuses.any { it.equals("true", ignoreCase = true) } -> "true"
-            else -> null
-        }
+        return plugin.databaseManager.getSyncState(uuid)?.status
     }
 
     private fun prepareSyncStatusRows(uuid: UUID, playerName: String) {

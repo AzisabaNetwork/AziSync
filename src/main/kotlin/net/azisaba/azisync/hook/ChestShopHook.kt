@@ -28,21 +28,13 @@ class ChestShopHook(private val plugin: AziSync) : Listener {
 
     private fun addMoney(uuid: java.util.UUID, amount: BigDecimal) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                val amountDouble = amount.toDouble()
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline + amountDouble)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, amount.toDouble())
         })
     }
 
     private fun takeMoney(uuid: java.util.UUID, amount: BigDecimal) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                val amountDouble = amount.toDouble()
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline - amountDouble)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, -amount.toDouble())
         })
     }
 }

@@ -36,6 +36,7 @@ database:
     locationTableName: "azisync_location"
     economyTableName: "azisync_economy"
     craftGuiTableName: "azisync_craftgui"
+    syncStateTableName: "azisync_sync_state"
 
 
 general:

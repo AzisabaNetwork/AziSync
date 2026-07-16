@@ -12,6 +12,7 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
     @EventHandler(priority = EventPriority.HIGH)
     fun onPlayerJoin(event: PlayerJoinEvent) {
         val uuid = event.player.uniqueId
+        val playerName = event.player.name
         val loadDelayTicks = plugin.config.getLong("general.loadDelayTicks", 5L).coerceAtLeast(0L)
         object : org.bukkit.scheduler.BukkitRunnable() {
             var count = 0
@@ -26,7 +27,6 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
         }.runTaskTimer(plugin, 0L, 20L)
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            val player = Bukkit.getPlayer(uuid) ?: return@Runnable
             var waitCount = 0
             
             // Wait until sync_complete is true
@@ -43,26 +43,24 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
             }
             
             if (waitCount >= 40) {
-                plugin.logger.warning("Data sync timeout for player ${player.name}")
+                plugin.logger.warning("Data sync timeout for player $playerName")
                 if (plugin.config.getBoolean("general.kickOnFailedSync", false)) {
                     Bukkit.getScheduler().runTask(plugin, Runnable {
-                        player.kickPlayer("Data sync timeout. Please reconnect.")
+                        Bukkit.getPlayer(uuid)?.kickPlayer("Data sync timeout. Please reconnect.")
                     })
                     return@Runnable
                 }
             }
             
-            if (player.isOnline) {
-                Bukkit.getScheduler().runTaskLater(plugin, Runnable {
-                    if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
-                        return@Runnable
-                    }
-                    val delayedPlayer = Bukkit.getPlayer(uuid) ?: return@Runnable
-                    if (delayedPlayer.isOnline && !plugin.syncManager.isLoaded(delayedPlayer)) {
-                        plugin.syncManager.loadData(delayedPlayer)
-                    }
-                }, loadDelayTicks)
-            }
+            Bukkit.getScheduler().runTaskLater(plugin, Runnable {
+                if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
+                    return@Runnable
+                }
+                val delayedPlayer = Bukkit.getPlayer(uuid) ?: return@Runnable
+                if (delayedPlayer.isOnline && !plugin.syncManager.isLoaded(delayedPlayer)) {
+                    plugin.syncManager.loadData(delayedPlayer)
+                }
+            }, loadDelayTicks)
         })
     }
 }

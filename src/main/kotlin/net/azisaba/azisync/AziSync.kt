@@ -11,6 +11,7 @@ import net.azisaba.azisync.sync.SyncManager
 import net.azisaba.azisync.task.DataSaveTask
 import net.azisaba.azisync.util.MessageManager
 import org.bukkit.entity.Player
+import org.bukkit.event.HandlerList
 import org.bukkit.plugin.java.JavaPlugin
 
 class AziSync : JavaPlugin() {
@@ -32,56 +33,91 @@ class AziSync : JavaPlugin() {
 
     override fun onEnable() {
         saveDefaultConfig()
-
-        try {
-            databaseManager = DatabaseManager(this)
-        } catch (e: Exception) {
-            logger.severe("Failed to initialize database. Disabling AziSync.")
-            e.printStackTrace()
+        if (!initializeRuntime()) {
             server.pluginManager.disablePlugin(this)
             return
         }
 
-        syncManager = SyncManager(this)
-        messageManager = MessageManager(this)
-        invseeManager = InvseeManager(this)
-        
-
-        DataSaveTask(this).start()
-
-        server.pluginManager.registerEvents(PlayerJoinListener(this), this)
-        server.pluginManager.registerEvents(PlayerQuitListener(this), this)
-        server.pluginManager.registerEvents(PlayerProtectListener(this), this)
-        
-        hookManager = HookManager(this)
-        hookManager.registerHooks()
-        
         val commandExecutor = AziSyncCommand(this)
         getCommand("azisync")?.apply {
             setExecutor(commandExecutor)
             tabCompleter = commandExecutor
         }
 
+        logger.info("AziSync has been enabled.")
+    }
+
+    private fun initializeRuntime(): Boolean {
+        try {
+            databaseManager = DatabaseManager(this)
+        } catch (e: Exception) {
+            logger.severe("Failed to initialize database.")
+            e.printStackTrace()
+            return false
+        }
+
+        syncManager = SyncManager(this)
+        messageManager = MessageManager(this)
+        server.pluginManager.registerEvents(PlayerJoinListener(this), this)
+        server.pluginManager.registerEvents(PlayerQuitListener(this), this)
+        server.pluginManager.registerEvents(PlayerProtectListener(this), this)
+        
+        hookManager = HookManager(this)
+        hookManager.registerHooks()
+
+        invseeManager = InvseeManager(this)
+        DataSaveTask(this).start()
+
         server.onlinePlayers.forEach {
             syncManager.markLoaded(it)
         }
 
-        logger.info("AziSync has been enabled.")
+        return true
     }
 
     override fun onDisable() {
-        if (::syncManager.isInitialized) {
-            server.onlinePlayers.forEach {
-                syncManager.saveDataNow(it, true)
+        stopRuntime()
+        logger.info("AziSync has been disabled.")
+    }
+
+    fun reloadRuntime(): Boolean {
+        if (!flushOnlinePlayerData()) {
+            logger.warning("AziSync reload was cancelled because player data could not be saved safely.")
+            return false
+        }
+        stopRuntime(saveOnlinePlayerData = false)
+        reloadConfig()
+        if (!initializeRuntime()) {
+            server.pluginManager.disablePlugin(this)
+            return false
+        }
+        return true
+    }
+
+    private fun stopRuntime(saveOnlinePlayerData: Boolean = true) {
+        if (::syncManager.isInitialized && !syncManager.isShutdown()) {
+            if (saveOnlinePlayerData) {
+                flushOnlinePlayerData()
             }
+            server.scheduler.cancelTasks(this)
+            syncManager.shutdown()
+        } else {
+            server.scheduler.cancelTasks(this)
         }
 
-        server.scheduler.cancelTasks(this)
+        HandlerList.unregisterAll(this)
         
         if (::databaseManager.isInitialized) {
             databaseManager.close()
         }
-        logger.info("AziSync has been disabled.")
+    }
+
+    private fun flushOnlinePlayerData(): Boolean {
+        if (!::syncManager.isInitialized || syncManager.isShutdown()) return true
+        server.onlinePlayers.forEach {
+            syncManager.saveDataNow(it, true)
+        }
+        return syncManager.flushPendingSaves(10)
     }
 
     fun saveAziSyncData(player: Player) {

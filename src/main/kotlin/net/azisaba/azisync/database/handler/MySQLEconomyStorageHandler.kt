@@ -153,6 +153,50 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         }
     }
 
+    override fun addOfflineMoney(uuid: UUID, amount: Double): Boolean {
+        return try {
+            plugin.databaseManager.getConnection().use { conn ->
+                val sql = "UPDATE `$tableName` SET `offline_money` = `offline_money` + ? WHERE `player_uuid` = ?"
+                conn.prepareStatement(sql).use { stmt ->
+                    stmt.setDouble(1, amount)
+                    stmt.setString(2, uuid.toString())
+                    stmt.executeUpdate() > 0
+                }
+            }
+        } catch (e: SQLException) {
+            plugin.logger.warning("Error adding offline balance for $uuid: ${e.message}")
+            false
+        }
+    }
+
+    override fun consumeOfflineMoney(uuid: UUID): Double? {
+        plugin.databaseManager.getConnection().use { conn ->
+            conn.autoCommit = false
+            try {
+                val amount = conn.prepareStatement(
+                    "SELECT `offline_money` FROM `$tableName` WHERE `player_uuid` = ? FOR UPDATE"
+                ).use { stmt ->
+                    stmt.setString(1, uuid.toString())
+                    stmt.executeQuery().use { rs -> if (rs.next()) rs.getDouble("offline_money") else null }
+                }
+                if (amount == null) {
+                    conn.rollback()
+                    return null
+                }
+                conn.prepareStatement("UPDATE `$tableName` SET `offline_money` = 0 WHERE `player_uuid` = ?").use { stmt ->
+                    stmt.setString(1, uuid.toString())
+                    stmt.executeUpdate()
+                }
+                conn.commit()
+                return amount
+            } catch (e: SQLException) {
+                conn.rollback()
+                plugin.logger.warning("Error consuming offline balance for $uuid: ${e.message}")
+                return null
+            }
+        }
+    }
+
     override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->

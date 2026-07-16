@@ -16,6 +16,8 @@ class DatabaseManager(private val plugin: AziSync) {
         HYBRID
     }
 
+    data class SyncState(val status: String, val version: Long)
+
     val storageMode: StorageMode = resolveStorageMode()
 
     val inventoryHandler: InventoryStorageHandler by lazy { MySQLInventoryStorageHandler(plugin) }
@@ -112,6 +114,64 @@ class DatabaseManager(private val plugin: AziSync) {
         dataSource = null
     }
 
+    fun beginSync(uuid: java.util.UUID, playerName: String): Long {
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            connection.autoCommit = false
+            try {
+                val currentVersion = connection.prepareStatement(
+                    "SELECT `version` FROM `$tableName` WHERE `player_uuid` = ? FOR UPDATE"
+                ).use { statement ->
+                    statement.setString(1, uuid.toString())
+                    statement.executeQuery().use { resultSet -> if (resultSet.next()) resultSet.getLong("version") else 0L }
+                }
+                val version = currentVersion + 1
+                connection.prepareStatement(
+                    "INSERT INTO `$tableName` (`player_uuid`, `player_name`, `status`, `version`, `updated_at`) VALUES (?, ?, 'saving', ?, ?) " +
+                        "ON DUPLICATE KEY UPDATE `player_name` = VALUES(`player_name`), `status` = 'saving', `version` = VALUES(`version`), `updated_at` = VALUES(`updated_at`)"
+                ).use { statement ->
+                    statement.setString(1, uuid.toString())
+                    statement.setString(2, playerName)
+                    statement.setLong(3, version)
+                    statement.setLong(4, System.currentTimeMillis())
+                    statement.executeUpdate()
+                }
+                connection.commit()
+                return version
+            } catch (e: SQLException) {
+                connection.rollback()
+                throw e
+            }
+        }
+    }
+
+    fun completeSync(uuid: java.util.UUID, version: Long): Boolean {
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            connection.prepareStatement(
+                "UPDATE `$tableName` SET `status` = 'complete', `updated_at` = ? WHERE `player_uuid` = ? AND `version` = ?"
+            ).use { statement ->
+                statement.setLong(1, System.currentTimeMillis())
+                statement.setString(2, uuid.toString())
+                statement.setLong(3, version)
+                return statement.executeUpdate() == 1
+            }
+        }
+    }
+
+    fun getSyncState(uuid: java.util.UUID): SyncState? {
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            connection.prepareStatement("SELECT `status`, `version` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1").use { statement ->
+                statement.setString(1, uuid.toString())
+                statement.executeQuery().use { resultSet ->
+                    if (resultSet.next()) return SyncState(resultSet.getString("status"), resultSet.getLong("version"))
+                }
+            }
+        }
+        return null
+    }
+
     private fun createTables() {
         val config = plugin.config
         val inventoryTable = config.getString("database.TablesNames.inventoryTableName", "azisync_inventory")
@@ -129,6 +189,21 @@ class DatabaseManager(private val plugin: AziSync) {
             getConnection().use { connection ->
                 connection.createStatement().use { statement ->
                     
+                    // Inventory
+                    val syncStateTable = config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS `$syncStateTable` (
+                            player_uuid CHAR(36) NOT NULL,
+                            player_name VARCHAR(16) $charSet NOT NULL,
+                            status VARCHAR(16) NOT NULL,
+                            version BIGINT NOT NULL,
+                            updated_at BIGINT NOT NULL,
+                            PRIMARY KEY(player_uuid)
+                        );
+                        """.trimIndent()
+                    )
+
                     // Inventory
                     if (config.getBoolean("general.enableModules.shareInventory") || config.getBoolean("general.enableModules.shareArmor") || config.getBoolean("general.enableModules.shareGameMode")) {
                         statement.execute(
@@ -244,7 +319,7 @@ class DatabaseManager(private val plugin: AziSync) {
                     }
 
                     // Location
-                    if (config.getBoolean("general.enableModules.shareLocation")) {
+                    if (config.getBoolean("general.enableModules.shareLocation") || config.getBoolean("general.enableModules.shareBedSpawn")) {
                         statement.execute(
                             """
                             CREATE TABLE IF NOT EXISTS `$locationTable` (

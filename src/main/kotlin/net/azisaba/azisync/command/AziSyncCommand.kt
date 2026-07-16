@@ -21,9 +21,11 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
 
         when (args[0].lowercase()) {
             "reload" -> {
-                plugin.reloadConfig()
-                plugin.messageManager.loadLanguages()
-                plugin.messageManager.sendMessage(sender, "reload_success")
+                if (plugin.reloadRuntime()) {
+                    plugin.messageManager.sendMessage(sender, "reload_success")
+                } else {
+                    sender.sendMessage("AziSync reload was cancelled because current player data could not be saved safely. The previous configuration remains active.")
+                }
             }
             "saveall" -> {
                 plugin.messageManager.sendMessage(sender, "save_initiated")

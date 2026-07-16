@@ -32,19 +32,13 @@ class ShopChestHook(private val plugin: AziSync) : Listener {
 
     private fun addMoney(uuid: UUID, amount: Double) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline + amount)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, amount)
         })
     }
 
     private fun takeMoney(uuid: UUID, amount: Double) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline - amount)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, -amount)
         })
     }
 }

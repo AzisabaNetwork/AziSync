@@ -42,19 +42,13 @@ class CrazyAuctionsHook(private val plugin: AziSync) : Listener {
             val offlinePlayer = Bukkit.getOfflinePlayer(playerName)
             val uuid = offlinePlayer.uniqueId
             
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline + amount)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, amount)
         })
     }
 
     private fun takeMoney(uuid: java.util.UUID, amount: Double) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            if (plugin.databaseManager.economyHandler.hasAccount(uuid)) {
-                val currentOffline = plugin.databaseManager.economyHandler.getOfflineBalance(uuid) ?: 0.0
-                plugin.databaseManager.economyHandler.setOfflineMoney(uuid, currentOffline - amount)
-            }
+            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, -amount)
         })
     }
 }
