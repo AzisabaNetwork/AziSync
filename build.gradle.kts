@@ -37,7 +37,7 @@ dependencies {
     compileOnly("com.github.MilkBowl:VaultAPI:1.7")
     compileOnly("de.epiceric:ShopChest:1.13-SNAPSHOT")
     compileOnly("com.acrobot.chestshop:chestshop:3.12.2")
-    compileOnly("Jobs:jobs:5.2.6.6")
+    compileOnly("Jobs:jobs:5.2.6.8-Azisaba")
     compileOnly("net.azisaba:CraftGUI:1.15.2+1.1.1")
     compileOnly(fileTree("libs") {
         include("*.jar")
