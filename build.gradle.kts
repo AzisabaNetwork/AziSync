@@ -41,7 +41,6 @@ dependencies {
     compileOnly("net.azisaba:CraftGUI:1.15.2+1.1.1")
     compileOnly(fileTree("libs") {
         include("*.jar")
-        exclude("CraftGUI-*.jar")
     })
     implementation("com.zaxxer:HikariCP:4.0.3")
     implementation("mysql:mysql-connector-java:8.0.33")
