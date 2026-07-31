@@ -76,8 +76,16 @@ object AdvancementSerializer {
         while (iterator.hasNext()) {
             val advancement = iterator.next()
             val progress = player.getAdvancementProgress(advancement)
-            progress.awardedCriteria.toList().forEach { progress.revokeCriteria(it) }
-            savedAdvancements[advancement.key]?.awardedCriteria?.forEach { progress.awardCriteria(it) }
+            val savedCriteria = savedAdvancements[advancement.key]?.awardedCriteria?.toSet() ?: emptySet()
+
+            // Only change criteria that differ. Revoking and re-awarding every criterion makes
+            // Minecraft show advancement toasts again on every login.
+            progress.awardedCriteria
+                .filterNot(savedCriteria::contains)
+                .forEach { progress.revokeCriteria(it) }
+            savedCriteria
+                .filterNot(progress.awardedCriteria::contains)
+                .forEach { progress.awardCriteria(it) }
         }
     }
 
