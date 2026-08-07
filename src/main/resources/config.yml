@@ -13,8 +13,8 @@ storage:
 redis:
   host: localhost
   port: 6379
-  username: ""
-  password: ""
+  username: "azisync"
+  password: "azisync"
   timeout: 2000
 
 # database connection
