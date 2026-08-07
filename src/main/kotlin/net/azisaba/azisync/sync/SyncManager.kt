@@ -4,6 +4,7 @@ import net.azisaba.azisync.AziSync
 import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.util.AdvancementSerializer
 import net.azisaba.azisync.util.EffectSerializer
+import net.azisaba.azisync.util.EconomyAudit
 import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
@@ -62,6 +63,7 @@ class SyncManager(private val plugin: AziSync) {
 
         val uuid = player.uniqueId
         val playerName = player.name
+        val economyOperationId = UUID.randomUUID().toString().substring(0, 8)
         val syncStatus = "true"
 
         // Inventory
@@ -125,8 +127,23 @@ class SyncManager(private val plugin: AziSync) {
         val shareEconomy = plugin.config.getBoolean("general.enableModules.shareEconomy", true)
         val econ = plugin.hookManager.economyHook.getEconomy()
         val balance = if (shareEconomy && econ != null && economyReadyPlayers.contains(uuid)) {
-            econ.getBalance(player)
-        } else null
+            econ.getBalance(player).also {
+                EconomyAudit.info(plugin, "ECONOMY_SAVE_CAPTURED", uuid, playerName,
+                    "operationId" to economyOperationId, "balance" to it,
+                    "provider" to econ.name, "syncComplete" to syncComplete)
+            }
+        } else {
+            if (shareEconomy) {
+                EconomyAudit.warning(plugin, "ECONOMY_SAVE_SKIPPED", uuid, playerName,
+                    details = arrayOf(
+                        "providerAvailable" to (econ != null),
+                        "economyReady" to economyReadyPlayers.contains(uuid),
+                        "syncComplete" to syncComplete,
+                        "operationId" to economyOperationId
+                    ))
+            }
+            null
+        }
 
         // CraftGUI
         val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
@@ -246,6 +263,8 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Save Economy
                 if (shareEconomy && balance != null) {
+                    EconomyAudit.info(plugin, "ECONOMY_SAVE_STARTED", uuid, playerName,
+                        "operationId" to economyOperationId, "balance" to balance, "syncVersion" to syncVersion)
                     requireSaved(plugin.databaseManager.economyHandler.setData(uuid, playerName, balance, syncStatus), "economy")
                 }
 
@@ -278,6 +297,12 @@ class SyncManager(private val plugin: AziSync) {
                     }
                 }
                 plugin.logger.severe("Failed to save data for $playerName: ${e.message}")
+                if (shareEconomy) {
+                    EconomyAudit.severe(plugin, "ECONOMY_SAVE_PIPELINE_ABORTED", uuid, playerName, e,
+                        "operationId" to economyOperationId,
+                        "capturedBalance" to balance,
+                        "syncVersion" to syncVersion)
+                }
                 e.printStackTrace()
             } finally {
                 runCatching { syncLock?.close() }.onFailure {
@@ -334,6 +359,7 @@ class SyncManager(private val plugin: AziSync) {
         }
 
         val uuid = player.uniqueId
+        val economyOperationId = UUID.randomUUID().toString().substring(0, 8)
         economyReadyPlayers.remove(uuid)
         val playerName = player.name
         val creativeInventoryDisabled = plugin.config.getBoolean("general.disableCreativeItemShare", false) && player.gameMode == GameMode.CREATIVE
@@ -472,32 +498,73 @@ class SyncManager(private val plugin: AziSync) {
                 if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
                     val econ = plugin.hookManager.economyHook.getEconomy()
                     if (econ != null) {
+                        EconomyAudit.info(plugin, "ECONOMY_LOAD_STARTED", uuid, playerName,
+                            "operationId" to economyOperationId, "provider" to econ.name)
                         val econData = plugin.databaseManager.economyHandler.getData(uuid, playerName)
                         if (econData != null) {
-                            val authoritativeBalance = plugin.databaseManager.economyHandler.mergeOfflineMoneyIntoBalance(uuid)
-                            if (authoritativeBalance == null) {
-                                plugin.logger.severe("Failed to prepare economy data for ${player.name}")
+                            val mergeResult = plugin.databaseManager.economyHandler.mergeOfflineMoneyIntoBalance(uuid)
+                            if (mergeResult == null) {
+                                EconomyAudit.severe(plugin, "ECONOMY_LOAD_PREPARE_FAILED", uuid, playerName,
+                                    details = arrayOf("provider" to econ.name, "storedBalance" to econData.money,
+                                        "observedOfflineDelta" to econData.offlineMoney,
+                                        "operationId" to economyOperationId))
                             } else {
                             Bukkit.getScheduler().runTask(plugin, Runnable {
-                                if (!player.isOnline) return@Runnable
+                                if (!player.isOnline) {
+                                    EconomyAudit.warning(plugin, "ECONOMY_VAULT_APPLY_SKIPPED_OFFLINE", uuid, playerName,
+                                        details = arrayOf("targetBalance" to mergeResult.mergedBalance,
+                                            "provider" to econ.name, "operationId" to economyOperationId))
+                                    return@Runnable
+                                }
                                 val currentBalance = econ.getBalance(player)
-                                val difference = authoritativeBalance - currentBalance
+                                val difference = mergeResult.mergedBalance - currentBalance
+                                EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_STARTED", uuid, playerName,
+                                    "provider" to econ.name,
+                                    "operationId" to economyOperationId,
+                                    "currentBalance" to currentBalance,
+                                    "storedBalance" to mergeResult.storedBalance,
+                                    "offlineDelta" to mergeResult.offlineDelta,
+                                    "targetBalance" to mergeResult.mergedBalance,
+                                    "difference" to difference)
                                 val succeeded = when {
                                     difference > 0 -> econ.depositPlayer(player, difference).transactionSuccess()
                                     difference < 0 -> econ.withdrawPlayer(player, -difference).transactionSuccess()
                                     else -> true
                                 }
-                                if (succeeded) {
+                                val resultingBalance = econ.getBalance(player)
+                                val balanceMatches = kotlin.math.abs(resultingBalance - mergeResult.mergedBalance) < 0.000001
+                                if (succeeded && balanceMatches) {
                                     economyReadyPlayers.add(uuid)
-                                    if (econData.offlineMoney != 0.0) {
-                                        plugin.logger.info("Applied offline economy changes for ${player.name}: ${econData.offlineMoney}")
-                                    }
+                                    EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_SUCCEEDED", uuid, playerName,
+                                        "provider" to econ.name,
+                                        "operationId" to economyOperationId,
+                                        "previousBalance" to currentBalance,
+                                        "offlineDelta" to mergeResult.offlineDelta,
+                                        "targetBalance" to mergeResult.mergedBalance,
+                                        "resultingBalance" to resultingBalance)
                                 } else {
-                                    plugin.logger.severe("Vault rejected synchronized economy balance for ${player.name}; economy saving is disabled for this session.")
+                                    EconomyAudit.severe(plugin, "ECONOMY_VAULT_APPLY_FAILED", uuid, playerName,
+                                        details = arrayOf(
+                                            "provider" to econ.name,
+                                            "operationId" to economyOperationId,
+                                            "transactionSucceeded" to succeeded,
+                                            "balanceMatches" to balanceMatches,
+                                            "previousBalance" to currentBalance,
+                                            "difference" to difference,
+                                            "targetBalance" to mergeResult.mergedBalance,
+                                            "resultingBalance" to resultingBalance,
+                                            "safetyAction" to "economy_saving_disabled_for_session"
+                                        ))
                                 }
                             })
                             }
+                        } else {
+                            EconomyAudit.severe(plugin, "ECONOMY_LOAD_ACCOUNT_READ_FAILED", uuid, playerName,
+                                details = arrayOf("provider" to econ.name, "operationId" to economyOperationId))
                         }
+                    } else {
+                        EconomyAudit.severe(plugin, "ECONOMY_LOAD_PROVIDER_MISSING", uuid, playerName,
+                            details = arrayOf("operationId" to economyOperationId))
                     }
                 }
 
@@ -526,6 +593,10 @@ class SyncManager(private val plugin: AziSync) {
                 plugin.logger.info("Successfully loaded data for ${player.name}")
             } catch (e: Exception) {
                 plugin.logger.severe("Failed to load data for ${player.name}: ${e.message}")
+                if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
+                    EconomyAudit.severe(plugin, "ECONOMY_LOAD_PIPELINE_ABORTED", uuid, playerName, e,
+                        "operationId" to economyOperationId)
+                }
                 e.printStackTrace()
             }
         }

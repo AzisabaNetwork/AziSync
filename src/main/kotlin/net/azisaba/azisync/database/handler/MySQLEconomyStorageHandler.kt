@@ -1,6 +1,7 @@
 package net.azisaba.azisync.database.handler
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.util.EconomyAudit
 import java.sql.SQLException
 import java.util.UUID
 
@@ -168,11 +169,20 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
                     stmt.setString(1, uuid.toString())
                     stmt.setDouble(2, amount)
                     stmt.setString(3, System.currentTimeMillis().toString())
-                    stmt.executeUpdate() > 0
+                    val updated = stmt.executeUpdate() > 0
+                    if (updated) {
+                        EconomyAudit.info(plugin, "OFFLINE_DELTA_STORED", uuid,
+                            details = arrayOf("amount" to amount, "table" to tableName))
+                    } else {
+                        EconomyAudit.severe(plugin, "OFFLINE_DELTA_NOT_STORED", uuid,
+                            details = arrayOf("amount" to amount, "table" to tableName, "reason" to "no_rows_changed"))
+                    }
+                    updated
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error adding offline balance for $uuid: ${e.message}")
+            EconomyAudit.severe(plugin, "OFFLINE_DELTA_DB_ERROR", uuid, error = e,
+                details = arrayOf("amount" to amount, "table" to tableName))
             false
         }
     }
@@ -205,7 +215,7 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         }
     }
 
-    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double? {
+    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): EconomyMergeResult? {
         plugin.databaseManager.getConnection().use { conn ->
             conn.autoCommit = false
             try {
@@ -219,6 +229,8 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
                 }
                 if (balances == null) {
                     conn.rollback()
+                    EconomyAudit.severe(plugin, "ECONOMY_MERGE_ACCOUNT_MISSING", uuid,
+                        details = arrayOf("table" to tableName))
                     return null
                 }
 
@@ -234,10 +246,19 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
                     }
                 }
                 conn.commit()
-                return mergedBalance
+                val result = EconomyMergeResult(balances.first, balances.second, mergedBalance)
+                EconomyAudit.info(plugin, "ECONOMY_MERGE_COMMITTED", uuid,
+                    details = arrayOf(
+                        "storedBalance" to result.storedBalance,
+                        "offlineDelta" to result.offlineDelta,
+                        "mergedBalance" to result.mergedBalance,
+                        "table" to tableName
+                    ))
+                return result
             } catch (e: SQLException) {
                 conn.rollback()
-                plugin.logger.warning("Error merging offline balance for $uuid: ${e.message}")
+                EconomyAudit.severe(plugin, "ECONOMY_MERGE_DB_ERROR", uuid, error = e,
+                    details = arrayOf("table" to tableName))
                 return null
             }
         }
@@ -277,11 +298,20 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
                     stmt.setString(3, syncStatus)
                     stmt.setString(4, System.currentTimeMillis().toString())
                     stmt.setString(5, uuid.toString())
-                    stmt.executeUpdate() > 0
+                    val updated = stmt.executeUpdate() > 0
+                    if (updated) {
+                        EconomyAudit.info(plugin, "ECONOMY_SAVE_COMMITTED", uuid, playerName,
+                            "balance" to money, "syncStatus" to syncStatus, "table" to tableName)
+                    } else {
+                        EconomyAudit.severe(plugin, "ECONOMY_SAVE_NOT_COMMITTED", uuid, playerName,
+                            details = arrayOf("balance" to money, "syncStatus" to syncStatus, "table" to tableName, "reason" to "no_rows_changed"))
+                    }
+                    updated
                 }
             }
         } catch (e: SQLException) {
-            plugin.logger.warning("Error saving economy data for ${playerName}: ${e.message}")
+            EconomyAudit.severe(plugin, "ECONOMY_SAVE_DB_ERROR", uuid, playerName, e,
+                "balance" to money, "syncStatus" to syncStatus, "table" to tableName)
             false
         }
     }

@@ -2,6 +2,7 @@ package net.azisaba.azisync.database.handler.redis
 
 import net.azisaba.azisync.AziSync
 import net.azisaba.azisync.database.handler.DatabaseEconomyData
+import net.azisaba.azisync.database.handler.EconomyMergeResult
 import net.azisaba.azisync.database.handler.EconomyStorageHandler
 import java.util.UUID
 
@@ -71,7 +72,7 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         }
     }
 
-    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double? {
+    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): EconomyMergeResult? {
         return plugin.databaseManager.redisManager?.getResource()?.use {
             val key = "$prefix$uuid"
             val result = it.eval(
@@ -80,12 +81,16 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
                 local offline = tonumber(redis.call('HGET', KEYS[1], 'offline_money') or '0')
                 local merged = money + offline
                 redis.call('HSET', KEYS[1], 'money', tostring(merged), 'offline_money', '0.0')
-                return tostring(merged)
+                return {tostring(money), tostring(offline), tostring(merged)}
                 """.trimIndent(),
                 listOf(key),
                 emptyList<String>()
             )
-            result?.toString()?.toDoubleOrNull()
+            val values = result as? List<*> ?: return@use null
+            val stored = values.getOrNull(0)?.toString()?.toDoubleOrNull() ?: return@use null
+            val offline = values.getOrNull(1)?.toString()?.toDoubleOrNull() ?: return@use null
+            val merged = values.getOrNull(2)?.toString()?.toDoubleOrNull() ?: return@use null
+            EconomyMergeResult(stored, offline, merged)
         }
     }
 

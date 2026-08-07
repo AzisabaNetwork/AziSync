@@ -40,6 +40,9 @@ database:
 
 
 general:
+  # Set this to a unique proxy/server identifier to make cross-server audit logs searchable.
+  # When empty, the Minecraft server port is used.
+  serverId: ""
   enableModules:
     shareInventory: false
     shareGameMode: false
@@ -82,6 +85,10 @@ general:
   jobsWait:
     pollMillis: 25
     timeoutMillis: 5000
+  economyAudit:
+    enabled: true
+    logSuccess: true
+    logStackTraces: true
   locationSyncOptions:
     onlineTimeToSaveLocation: 0
 

@@ -2,6 +2,12 @@ package net.azisaba.azisync.database.handler
 
 import java.util.UUID
 
+data class EconomyMergeResult(
+    val storedBalance: Double,
+    val offlineDelta: Double,
+    val mergedBalance: Double
+)
+
 interface EconomyStorageHandler {
     fun getSyncStatus(uuid: UUID): String?
     fun hasAccount(uuid: UUID): Boolean
@@ -13,7 +19,7 @@ interface EconomyStorageHandler {
     fun setOfflineMoney(uuid: UUID, amount: Double): Boolean
     fun addOfflineMoney(uuid: UUID, amount: Double): Boolean
     fun consumeOfflineMoney(uuid: UUID): Double?
-    fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double?
+    fun mergeOfflineMoneyIntoBalance(uuid: UUID): EconomyMergeResult?
     fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean
     fun setData(uuid: UUID, playerName: String, money: Double, syncStatus: String): Boolean
 }

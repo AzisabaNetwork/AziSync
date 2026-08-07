@@ -3,6 +3,7 @@ package net.azisaba.azisync.hook
 import me.badbones69.crazyauctions.api.events.AuctionBuyEvent
 import me.badbones69.crazyauctions.api.events.AuctionWinBidEvent
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.util.EconomyAudit
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -17,7 +18,7 @@ class CrazyAuctionsHook(private val plugin: AziSync) : Listener {
 
         val player = Bukkit.getPlayer(sellerUuid)
         if (player == null || !player.isOnline) {
-            addMoney(sellerUuid, price)
+            addMoney(sellerUuid, price, "CrazyAuctions:buy:seller")
         }
     }
 
@@ -28,25 +29,35 @@ class CrazyAuctionsHook(private val plugin: AziSync) : Listener {
 
         val sellerPlayer = Bukkit.getPlayer(sellerUuid)
         if (sellerPlayer == null || !sellerPlayer.isOnline) {
-            addMoney(sellerUuid, bid)
+            addMoney(sellerUuid, bid, "CrazyAuctions:bid_win:seller")
         }
 
         val buyerUuid = winningBidderUuid(event)
         val buyerPlayer = buyerUuid?.let(Bukkit::getPlayer)
         if (buyerUuid != null && (buyerPlayer == null || !buyerPlayer.isOnline)) {
-            takeMoney(buyerUuid, bid)
+            takeMoney(buyerUuid, bid, "CrazyAuctions:bid_win:buyer")
         }
     }
 
-    private fun addMoney(uuid: UUID, amount: Double) {
+    private fun addMoney(uuid: UUID, amount: Double, source: String) {
+        EconomyAudit.info(plugin, "OFFLINE_DELTA_QUEUED", uuid,
+            details = arrayOf("amount" to amount, "source" to source))
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, amount)
+            if (!plugin.databaseManager.economyHandler.addOfflineMoney(uuid, amount)) {
+                EconomyAudit.severe(plugin, "OFFLINE_DELTA_HANDLER_FAILED", uuid,
+                    details = arrayOf("amount" to amount, "source" to source))
+            }
         })
     }
 
-    private fun takeMoney(uuid: java.util.UUID, amount: Double) {
+    private fun takeMoney(uuid: java.util.UUID, amount: Double, source: String) {
+        EconomyAudit.info(plugin, "OFFLINE_DELTA_QUEUED", uuid,
+            details = arrayOf("amount" to -amount, "source" to source))
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            plugin.databaseManager.economyHandler.addOfflineMoney(uuid, -amount)
+            if (!plugin.databaseManager.economyHandler.addOfflineMoney(uuid, -amount)) {
+                EconomyAudit.severe(plugin, "OFFLINE_DELTA_HANDLER_FAILED", uuid,
+                    details = arrayOf("amount" to -amount, "source" to source))
+            }
         })
     }
 
