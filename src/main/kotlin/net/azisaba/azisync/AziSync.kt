@@ -4,6 +4,7 @@ import net.azisaba.azisync.command.AziSyncCommand
 import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.hook.HookManager
 import net.azisaba.azisync.listener.PlayerJoinListener
+import net.azisaba.azisync.listener.AdvancementPreloadListener
 import net.azisaba.azisync.listener.PlayerProtectListener
 import net.azisaba.azisync.listener.PlayerQuitListener
 import net.azisaba.azisync.manager.InvseeManager
@@ -59,6 +60,7 @@ class AziSync : JavaPlugin() {
         syncManager = SyncManager(this)
         messageManager = MessageManager(this)
         server.pluginManager.registerEvents(PlayerJoinListener(this), this)
+        server.pluginManager.registerEvents(AdvancementPreloadListener(this), this)
         server.pluginManager.registerEvents(PlayerQuitListener(this), this)
         server.pluginManager.registerEvents(PlayerProtectListener(this), this)
         

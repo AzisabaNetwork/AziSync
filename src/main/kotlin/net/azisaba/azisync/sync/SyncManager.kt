@@ -3,6 +3,7 @@ package net.azisaba.azisync.sync
 import net.azisaba.azisync.AziSync
 import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.util.AdvancementSerializer
+import net.azisaba.azisync.util.SerializedAdvancement
 import net.azisaba.azisync.util.EffectSerializer
 import net.azisaba.azisync.util.EconomyAudit
 import net.azisaba.azisync.util.ItemSerializer
@@ -21,6 +22,8 @@ class SyncManager(private val plugin: AziSync) {
     
     private val loadedPlayers = ConcurrentHashMap<UUID, Boolean>()
     private val economyReadyPlayers = ConcurrentHashMap.newKeySet<UUID>()
+    private val preloadedAdvancements = ConcurrentHashMap<UUID, List<SerializedAdvancement>>()
+    private val advancementPreloadHandled = ConcurrentHashMap.newKeySet<UUID>()
     private val saveChains = ConcurrentHashMap<UUID, CompletableFuture<Void>>()
     private val databaseExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
         Thread(runnable, "AziSync-Database").apply { isDaemon = true }
@@ -352,6 +355,104 @@ class SyncManager(private val plugin: AziSync) {
 
     fun isShutdown(): Boolean = databaseExecutor.isShutdown
 
+    fun preloadAdvancements(uuid: UUID, playerName: String) {
+        advancementPreloadHandled.add(uuid)
+        preloadedAdvancements.remove(uuid)
+        if (!plugin.databaseManager.isAvailable()) {
+            logAdvancement("PRELOAD_SKIPPED_DATABASE_UNAVAILABLE", uuid, playerName, warning = true)
+            return
+        }
+
+        try {
+            val graceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
+            val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
+            val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
+            if (graceMillis > 0) Thread.sleep(graceMillis)
+            val waitStarted = System.nanoTime()
+
+            while (true) {
+                when (val status = getSyncStatus(uuid)) {
+                    null, "complete" -> break
+                    "failed" -> {
+                        logAdvancement("PRELOAD_SKIPPED_FAILED_SYNC", uuid, playerName, warning = true)
+                        return
+                    }
+                    "saving" -> Unit
+                    else -> {
+                        logAdvancement("PRELOAD_SKIPPED_UNKNOWN_SYNC_STATE", uuid, playerName, warning = true,
+                            "status" to status)
+                        return
+                    }
+                }
+                val waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)
+                if (waitedMillis >= timeoutMillis) {
+                    logAdvancement("PRELOAD_SKIPPED_TIMEOUT", uuid, playerName, warning = true,
+                        "waitedMillis" to waitedMillis)
+                    return
+                }
+                Thread.sleep(pollMillis)
+            }
+
+            val data = plugin.databaseManager.advancementHandler.getData(uuid, playerName)
+            if (data == null || data.advancements == "none") {
+                logAdvancement("PRELOAD_NO_REMOTE_DATA", uuid, playerName)
+                return
+            }
+            val decoded = AdvancementSerializer.fromBase64(data.advancements)
+            preloadedAdvancements[uuid] = decoded
+            logAdvancement("PRELOAD_READY", uuid, playerName,
+                "advancementCount" to decoded.size,
+                "criteriaCount" to decoded.sumOf { it.awardedCriteria.size })
+        } catch (e: Exception) {
+            logAdvancement("PRELOAD_FAILED", uuid, playerName, warning = true,
+                "errorType" to e.javaClass.simpleName,
+                "error" to e.message)
+            plugin.logger.log(java.util.logging.Level.WARNING, "Failed to preload advancements for $playerName", e)
+        }
+    }
+
+    fun applyPreloadedAdvancements(player: Player) {
+        val uuid = player.uniqueId
+        val advancements = preloadedAdvancements.remove(uuid) ?: return
+        try {
+            val result = AdvancementSerializer.merge(player, advancements)
+            logAdvancement("PRELOGIN_MERGE_APPLIED", uuid, player.name,
+                "savedAdvancements" to result.savedAdvancements,
+                "localAdvancements" to result.localAdvancements,
+                "awardedCriteria" to result.awardedCriteria,
+                "missingAdvancements" to result.missingAdvancements,
+                "invalidCriteria" to result.invalidCriteria,
+                "restoreFailures" to result.restoreFailures)
+        } catch (e: Exception) {
+            logAdvancement("PRELOGIN_MERGE_FAILED", uuid, player.name, warning = true,
+                "errorType" to e.javaClass.simpleName,
+                "error" to e.message)
+            plugin.logger.log(java.util.logging.Level.WARNING, "Failed to merge preloaded advancements for ${player.name}", e)
+        }
+    }
+
+    private fun logAdvancement(
+        action: String,
+        uuid: UUID,
+        playerName: String,
+        vararg details: Pair<String, Any?>
+    ) = logAdvancement(action, uuid, playerName, false, *details)
+
+    private fun logAdvancement(
+        action: String,
+        uuid: UUID,
+        playerName: String,
+        warning: Boolean,
+        vararg details: Pair<String, Any?>
+    ) {
+        val serverId = plugin.config.getString("general.serverId", "")?.takeIf { it.isNotBlank() }
+            ?: "port-${plugin.server.port}"
+        val suffix = details.joinToString(separator = " ") { (key, value) -> "$key=${value ?: "none"}" }
+        val message = "[AdvancementAudit] action=$action server=$serverId player=$playerName uuid=$uuid" +
+            if (suffix.isEmpty()) "" else " $suffix"
+        if (warning) plugin.logger.warning(message) else plugin.logger.info(message)
+    }
+
     fun loadData(player: Player) {
         if (!plugin.databaseManager.isAvailable()) {
             plugin.logger.warning("Skipping load for ${player.name}: database is not available.")
@@ -461,12 +562,12 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Advancements
                 if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
-                    val advancementData = plugin.databaseManager.advancementHandler.getData(uuid, playerName)
-                    if (advancementData != null && advancementData.advancements != "none") {
-                        val advancements = AdvancementSerializer.fromBase64(advancementData.advancements)
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            AdvancementSerializer.apply(player, advancements)
-                        })
+                    if (advancementPreloadHandled.contains(uuid)) {
+                        logAdvancement("POST_JOIN_APPLY_SKIPPED_PRELOADED", uuid, playerName)
+                    } else {
+                        // Never restore through Bukkit after the initial advancement packet:
+                        // doing so would replay rewards, events, sounds, and client toasts.
+                        logAdvancement("POST_JOIN_RESTORE_SKIPPED_NO_PRELOAD", uuid, playerName, warning = true)
                     }
                 }
 
@@ -605,6 +706,8 @@ class SyncManager(private val plugin: AziSync) {
     fun removeLoadedStatus(uuid: UUID) {
         loadedPlayers.remove(uuid)
         economyReadyPlayers.remove(uuid)
+        preloadedAdvancements.remove(uuid)
+        advancementPreloadHandled.remove(uuid)
     }
 
     fun setSyncStatus(uuid: UUID, playerName: String, isComplete: Boolean) {

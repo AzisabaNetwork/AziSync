@@ -15,6 +15,15 @@ data class SerializedAdvancement(
     val awardedCriteria: List<String>
 )
 
+data class AdvancementMergeResult(
+    val savedAdvancements: Int,
+    val localAdvancements: Int,
+    val awardedCriteria: Int,
+    val missingAdvancements: Int,
+    val invalidCriteria: Int,
+    val restoreFailures: Int
+)
+
 object AdvancementSerializer {
 
     fun toBase64(player: Player): String {
@@ -70,23 +79,48 @@ object AdvancementSerializer {
         }
     }
 
-    fun apply(player: Player, advancements: List<SerializedAdvancement>) {
+    fun merge(player: Player, advancements: List<SerializedAdvancement>): AdvancementMergeResult {
         val savedAdvancements = advancements.associateBy { it.key }
+        var localAdvancements = 0
+        var awardedCriteria = 0
+        var missingAdvancements = 0
+        var invalidCriteria = 0
+        var restoreFailures = 0
+
+        for (saved in advancements) {
+            if (Bukkit.getAdvancement(saved.key) == null) missingAdvancements++
+        }
+
         val iterator = Bukkit.advancementIterator()
         while (iterator.hasNext()) {
             val advancement = iterator.next()
             val progress = player.getAdvancementProgress(advancement)
-            val savedCriteria = savedAdvancements[advancement.key]?.awardedCriteria?.toSet() ?: emptySet()
-
-            // Only change criteria that differ. Revoking and re-awarding every criterion makes
-            // Minecraft show advancement toasts again on every login.
-            progress.awardedCriteria
-                .filterNot(savedCriteria::contains)
-                .forEach { progress.revokeCriteria(it) }
-            savedCriteria
-                .filterNot(progress.awardedCriteria::contains)
-                .forEach { progress.awardCriteria(it) }
+            if (progress.awardedCriteria.isNotEmpty()) localAdvancements++
+            val savedCriteria = savedAdvancements[advancement.key]?.awardedCriteria ?: continue
+            val knownCriteria = advancement.criteria
+            for (criterion in savedCriteria) {
+                if (!knownCriteria.contains(criterion)) {
+                    invalidCriteria++
+                    continue
+                }
+                if (!progress.awardedCriteria.contains(criterion)) {
+                    if (SilentAdvancementRestorer.restore(player, advancement, criterion)) {
+                        awardedCriteria++
+                    } else {
+                        restoreFailures++
+                    }
+                }
+            }
         }
+
+        return AdvancementMergeResult(
+            savedAdvancements.size,
+            localAdvancements,
+            awardedCriteria,
+            missingAdvancements,
+            invalidCriteria,
+            restoreFailures
+        )
     }
 
     @Suppress("DEPRECATION")
