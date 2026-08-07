@@ -70,6 +70,18 @@ general:
   kickOnFailedSync: false
   # Delay loading synced data after join so other join handlers can finish first.
   loadDelayTicks: 5
+  # Cross-server handoff coordination. Completed saves continue immediately after
+  # a small grace period; active saves are polled until completion.
+  syncWait:
+    handoffGraceMillis: 100
+    pollMillis: 50
+    timeoutMillis: 10000
+    lockTimeoutSeconds: 10
+  # Jobs has no completion callback, so AziSync polls its saving state. A save that
+  # finishes quickly continues within pollMillis instead of waiting a fixed delay.
+  jobsWait:
+    pollMillis: 25
+    timeoutMillis: 5000
   locationSyncOptions:
     onlineTimeToSaveLocation: 0
 

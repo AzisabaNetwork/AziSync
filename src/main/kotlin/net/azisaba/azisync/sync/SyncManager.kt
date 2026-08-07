@@ -19,9 +19,13 @@ import java.util.concurrent.TimeUnit
 class SyncManager(private val plugin: AziSync) {
     
     private val loadedPlayers = ConcurrentHashMap<UUID, Boolean>()
+    private val economyReadyPlayers = ConcurrentHashMap.newKeySet<UUID>()
     private val saveChains = ConcurrentHashMap<UUID, CompletableFuture<Void>>()
     private val databaseExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
         Thread(runnable, "AziSync-Database").apply { isDaemon = true }
+    }
+    private val syncStateExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "AziSync-SyncState").apply { isDaemon = true }
     }
 
     fun isLoaded(player: Player): Boolean {
@@ -30,6 +34,9 @@ class SyncManager(private val plugin: AziSync) {
 
     fun markLoaded(player: Player) {
         loadedPlayers[player.uniqueId] = true
+        if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
+            economyReadyPlayers.add(player.uniqueId)
+        }
     }
 
     fun saveData(player: Player, syncComplete: Boolean = false) {
@@ -117,64 +124,88 @@ class SyncManager(private val plugin: AziSync) {
         // Economy
         val shareEconomy = plugin.config.getBoolean("general.enableModules.shareEconomy", true)
         val econ = plugin.hookManager.economyHook.getEconomy()
-        val balance = if (shareEconomy && econ != null) econ.getBalance(player) else null
+        val balance = if (shareEconomy && econ != null && economyReadyPlayers.contains(uuid)) {
+            econ.getBalance(player)
+        } else null
 
         // CraftGUI
         val shareCraftGui = plugin.config.getBoolean("general.enableModules.shareCraftGui", false)
         val craftGuiPref = if (shareCraftGui) getCraftGuiPreference(uuid) else null
 
+        val syncVersionFuture: CompletableFuture<Long?> = if (syncComplete) {
+            CompletableFuture.supplyAsync({
+                plugin.databaseManager.beginSync(uuid, playerName).also {
+                    if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+                        plugin.databaseManager.redisManager?.setSyncStatus(uuid, "saving")
+                    }
+                }
+            }, syncStateExecutor)
+        } else {
+            CompletableFuture.completedFuture(null)
+        }
+
         val saveTask = Runnable {
+            var syncVersion: Long? = null
+            var syncLock: DatabaseManager.SyncLock? = null
             try {
                 if (!plugin.databaseManager.isAvailable()) {
                     return@Runnable
                 }
 
-                val syncVersion = if (syncComplete) {
-                    plugin.databaseManager.beginSync(uuid, playerName)
-                } else {
-                    null
+                syncVersion = syncVersionFuture.join()
+
+                val jobsPollMillis = plugin.config.getLong("general.jobsWait.pollMillis", 25L).coerceIn(10L, 250L)
+                val jobsTimeoutMillis = plugin.config.getLong("general.jobsWait.timeoutMillis", 5000L).coerceAtLeast(0L)
+                val jobsWaitStarted = System.nanoTime()
+                while (syncComplete && plugin.hookManager.jobsHook.isPlayerSaving(uuid) &&
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - jobsWaitStarted) < jobsTimeoutMillis) {
+                    Thread.sleep(jobsPollMillis)
+                }
+                val jobsWaitMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - jobsWaitStarted)
+                if (syncComplete && plugin.hookManager.jobsHook.isPlayerSaving(uuid)) {
+                    plugin.logger.warning("Jobs saving task for $playerName timed out after ${jobsWaitMillis}ms. Saving AziSync data anyway.")
+                } else if (jobsWaitMillis >= jobsPollMillis) {
+                    plugin.logger.info("Waited ${jobsWaitMillis}ms for Jobs to finish saving $playerName's data.")
                 }
 
-                var waitCount = 0
-                while (syncComplete && plugin.hookManager.jobsHook.isPlayerSaving(uuid) && waitCount < 20) {
-                    Thread.sleep(250)
-                    waitCount++
-                }
-                if (waitCount >= 20) {
-                    plugin.logger.warning("Jobs saving task for $playerName timed out after 5 seconds. Saving AziSync data anyway.")
-                } else if (waitCount > 0) {
-                    plugin.logger.info("Waited ${waitCount * 250}ms for Jobs to finish saving $playerName's data.")
+                if (syncVersion != null) {
+                    val lockTimeoutSeconds = plugin.config.getInt("general.syncWait.lockTimeoutSeconds", 10).coerceAtLeast(1)
+                    syncLock = plugin.databaseManager.acquireSyncLock(uuid, lockTimeoutSeconds)
+                    if (!plugin.databaseManager.isCurrentSyncVersion(uuid, syncVersion)) {
+                        plugin.logger.warning("Skipped stale save for $playerName (sync version $syncVersion)")
+                        return@Runnable
+                    }
                 }
 
                 // Save Inventory
                 if (shareInventory || shareArmor || shareGameMode) {
                     val current = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
-                    plugin.databaseManager.inventoryHandler.setData(
+                    requireSaved(plugin.databaseManager.inventoryHandler.setData(
                         uuid, playerName,
                         inventoryBase64 ?: current?.inventory ?: "none",
                         armorBase64 ?: current?.armor ?: "none",
                         if (shareInventory) heldItemSlot else current?.hotbarSlot ?: 0,
                         if (shareGameMode) gameModeValue else current?.gamemode ?: 0,
                         syncStatus
-                    )
+                    ), "inventory")
                 }
 
                 // Save EnderChest
                 if (shareEnderChest && enderchestBase64 != null) {
-                    plugin.databaseManager.enderchestHandler.setData(uuid, playerName, enderchestBase64, syncStatus)
+                    requireSaved(plugin.databaseManager.enderchestHandler.setData(uuid, playerName, enderchestBase64, syncStatus), "ender chest")
                 }
 
                 // Save Experience
                 if (shareExperience) {
-                    plugin.databaseManager.experienceHandler.setData(
+                    requireSaved(plugin.databaseManager.experienceHandler.setData(
                         uuid, playerName, exp, expToLevel, totalExperience, level, syncStatus
-                    )
+                    ), "experience")
                 }
 
                 // Save Health/Food/Air
                 if (shareHealth || shareFood || shareAir) {
                     val current = plugin.databaseManager.healthHandler.getData(uuid, playerName)
-                    plugin.databaseManager.healthHandler.setData(
+                    requireSaved(plugin.databaseManager.healthHandler.setData(
                         uuid, playerName,
                         health ?: current?.health ?: 20.0,
                         healthScale ?: current?.healthScale ?: 20.0,
@@ -184,23 +215,23 @@ class SyncManager(private val plugin: AziSync) {
                         remainingAir ?: current?.air ?: 300,
                         maximumAir ?: current?.maxAir ?: 300,
                         syncStatus
-                    )
+                    ), "health")
                 }
 
                 // Save Potion Effects
                 if (sharePotionEffects && effectsBase64 != null) {
-                    plugin.databaseManager.potionEffectsHandler.setData(uuid, playerName, effectsBase64, syncStatus)
+                    requireSaved(plugin.databaseManager.potionEffectsHandler.setData(uuid, playerName, effectsBase64, syncStatus), "potion effects")
                 }
 
                 // Save Advancements
                 if (shareAdvancement && advancementsBase64 != null) {
-                    plugin.databaseManager.advancementHandler.setData(uuid, playerName, advancementsBase64, syncStatus)
+                    requireSaved(plugin.databaseManager.advancementHandler.setData(uuid, playerName, advancementsBase64, syncStatus), "advancements")
                 }
 
                 // Save Location
                 if (shareLocation || shareBedSpawn) {
                     val current = plugin.databaseManager.locationHandler.getData(uuid, playerName)
-                    plugin.databaseManager.locationHandler.setData(
+                    requireSaved(plugin.databaseManager.locationHandler.setData(
                         uuid, playerName,
                         locWorld ?: current?.world ?: "world",
                         locX ?: current?.x ?: 0.0,
@@ -210,39 +241,48 @@ class SyncManager(private val plugin: AziSync) {
                         locPitch ?: current?.pitch ?: 0f,
                         bedSpawn ?: current?.bedSpawn ?: "none",
                         syncStatus
-                    )
+                    ), "location")
                 }
 
                 // Save Economy
                 if (shareEconomy && balance != null) {
-                    plugin.databaseManager.economyHandler.setData(uuid, playerName, balance, syncStatus)
+                    requireSaved(plugin.databaseManager.economyHandler.setData(uuid, playerName, balance, syncStatus), "economy")
                 }
 
                 // Save CraftGUI
                 if (shareCraftGui && craftGuiPref != null) {
-                    plugin.databaseManager.craftGuiHandler.setData(
+                    requireSaved(plugin.databaseManager.craftGuiHandler.setData(
                         uuid, playerName,
                         getBooleanPreference(craftGuiPref, "isSoundEnabled", true),
                         getBooleanPreference(craftGuiPref, "isShowResultItems", true),
                         getBooleanPreference(craftGuiPref, "isCraftableOnly", false),
                         getBooleanPreference(craftGuiPref, "isStashEnabled", false),
                         syncStatus
-                    )
+                    ), "CraftGUI")
                 }
 
                 if (syncVersion != null) {
                     if (!plugin.databaseManager.completeSync(uuid, syncVersion)) {
                         plugin.logger.warning("Skipped stale sync completion for $playerName")
-                    }
-                    if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
-                        plugin.databaseManager.redisManager?.setSyncStatus(uuid, "true")
+                    } else if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+                        plugin.databaseManager.redisManager?.setSyncStatus(uuid, "complete")
                     }
                 }
                 
                 plugin.logger.info("Successfully saved data for $playerName")
             } catch (e: Exception) {
+                syncVersion?.let { version ->
+                    runCatching { plugin.databaseManager.failSync(uuid, version) }
+                    if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+                        plugin.databaseManager.redisManager?.setSyncStatus(uuid, "failed")
+                    }
+                }
                 plugin.logger.severe("Failed to save data for $playerName: ${e.message}")
                 e.printStackTrace()
+            } finally {
+                runCatching { syncLock?.close() }.onFailure {
+                    plugin.logger.warning("Failed to release sync lock for $playerName: ${it.message}")
+                }
             }
         }
 
@@ -258,6 +298,10 @@ class SyncManager(private val plugin: AziSync) {
         next.whenComplete { _, _ -> saveChains.remove(uuid, next) }
     }
 
+    private fun requireSaved(saved: Boolean, module: String) {
+        if (!saved) throw IllegalStateException("Failed to persist $module data")
+    }
+
     fun flushPendingSaves(timeoutSeconds: Long): Boolean {
         val pending = saveChains.values.toTypedArray()
         if (pending.isEmpty()) return true
@@ -271,7 +315,11 @@ class SyncManager(private val plugin: AziSync) {
     }
 
     fun shutdown() {
+        syncStateExecutor.shutdown()
         databaseExecutor.shutdown()
+        if (!syncStateExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            syncStateExecutor.shutdownNow()
+        }
         if (!databaseExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
             databaseExecutor.shutdownNow()
         }
@@ -286,6 +334,7 @@ class SyncManager(private val plugin: AziSync) {
         }
 
         val uuid = player.uniqueId
+        economyReadyPlayers.remove(uuid)
         val playerName = player.name
         val creativeInventoryDisabled = plugin.config.getBoolean("general.disableCreativeItemShare", false) && player.gameMode == GameMode.CREATIVE
         val loadInventory = plugin.config.getBoolean("general.enableModules.shareInventory", true) && !creativeInventoryDisabled
@@ -425,25 +474,29 @@ class SyncManager(private val plugin: AziSync) {
                     if (econ != null) {
                         val econData = plugin.databaseManager.economyHandler.getData(uuid, playerName)
                         if (econData != null) {
-                            val offlineMoney = plugin.databaseManager.economyHandler.consumeOfflineMoney(uuid) ?: 0.0
+                            val authoritativeBalance = plugin.databaseManager.economyHandler.mergeOfflineMoneyIntoBalance(uuid)
+                            if (authoritativeBalance == null) {
+                                plugin.logger.severe("Failed to prepare economy data for ${player.name}")
+                            } else {
                             Bukkit.getScheduler().runTask(plugin, Runnable {
-                                if (offlineMoney != 0.0) {
-                                    if (offlineMoney > 0) {
-                                        econ.depositPlayer(player, offlineMoney)
-                                    } else {
-                                        econ.withdrawPlayer(player, -offlineMoney)
-                                    }
-                                    plugin.logger.info("Applied offline economy changes for ${player.name}: $offlineMoney")
-                                }
-
+                                if (!player.isOnline) return@Runnable
                                 val currentBalance = econ.getBalance(player)
-                                val difference = econData.money - currentBalance
-                                if (difference > 0) {
-                                    econ.depositPlayer(player, difference)
-                                } else if (difference < 0) {
-                                    econ.withdrawPlayer(player, -difference)
+                                val difference = authoritativeBalance - currentBalance
+                                val succeeded = when {
+                                    difference > 0 -> econ.depositPlayer(player, difference).transactionSuccess()
+                                    difference < 0 -> econ.withdrawPlayer(player, -difference).transactionSuccess()
+                                    else -> true
+                                }
+                                if (succeeded) {
+                                    economyReadyPlayers.add(uuid)
+                                    if (econData.offlineMoney != 0.0) {
+                                        plugin.logger.info("Applied offline economy changes for ${player.name}: ${econData.offlineMoney}")
+                                    }
+                                } else {
+                                    plugin.logger.severe("Vault rejected synchronized economy balance for ${player.name}; economy saving is disabled for this session.")
                                 }
                             })
+                            }
                         }
                     }
                 }
@@ -480,9 +533,12 @@ class SyncManager(private val plugin: AziSync) {
     
     fun removeLoadedStatus(uuid: UUID) {
         loadedPlayers.remove(uuid)
+        economyReadyPlayers.remove(uuid)
     }
 
     fun setSyncStatus(uuid: UUID, playerName: String, isComplete: Boolean) {
+        // Per-module tables retain their legacy VARCHAR(5) true/false status.
+        // Cross-server coordination uses saving/complete in sync_state.
         val statusStr = if (isComplete) "true" else "false"
         if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
             plugin.databaseManager.redisManager?.setSyncStatus(uuid, statusStr)
@@ -517,7 +573,19 @@ class SyncManager(private val plugin: AziSync) {
     }
 
     fun getSyncStatus(uuid: UUID): String? {
-        return plugin.databaseManager.getSyncState(uuid)?.status
+        if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
+            val redisStatus = plugin.databaseManager.redisManager?.getSyncStatus(uuid)?.let(::normalizeSyncStatus)
+            if (redisStatus == "saving" || redisStatus == "failed") return redisStatus
+            // A cached "complete" can belong to the previous handoff. Confirm it
+            // against MySQL so a failed Redis write cannot expose stale data.
+        }
+        return plugin.databaseManager.getSyncState(uuid)?.status?.let(::normalizeSyncStatus)
+    }
+
+    private fun normalizeSyncStatus(status: String): String = when (status.lowercase()) {
+        "true" -> "complete"
+        "false" -> "saving"
+        else -> status.lowercase()
     }
 
     private fun prepareSyncStatusRows(uuid: UUID, playerName: String) {

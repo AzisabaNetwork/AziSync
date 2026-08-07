@@ -18,6 +18,22 @@ class DatabaseManager(private val plugin: AziSync) {
 
     data class SyncState(val status: String, val version: Long)
 
+    class SyncLock internal constructor(
+        private val connection: Connection,
+        private val lockName: String
+    ) : AutoCloseable {
+        override fun close() {
+            try {
+                connection.prepareStatement("SELECT RELEASE_LOCK(?)").use { statement ->
+                    statement.setString(1, lockName)
+                    statement.executeQuery().close()
+                }
+            } finally {
+                connection.close()
+            }
+        }
+    }
+
     val storageMode: StorageMode = resolveStorageMode()
 
     val inventoryHandler: InventoryStorageHandler by lazy { MySQLInventoryStorageHandler(plugin) }
@@ -159,6 +175,20 @@ class DatabaseManager(private val plugin: AziSync) {
         }
     }
 
+    fun failSync(uuid: java.util.UUID, version: Long): Boolean {
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            connection.prepareStatement(
+                "UPDATE `$tableName` SET `status` = 'failed', `updated_at` = ? WHERE `player_uuid` = ? AND `version` = ?"
+            ).use { statement ->
+                statement.setLong(1, System.currentTimeMillis())
+                statement.setString(2, uuid.toString())
+                statement.setLong(3, version)
+                return statement.executeUpdate() == 1
+            }
+        }
+    }
+
     fun getSyncState(uuid: java.util.UUID): SyncState? {
         val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
         getConnection().use { connection ->
@@ -170,6 +200,27 @@ class DatabaseManager(private val plugin: AziSync) {
             }
         }
         return null
+    }
+
+    fun isCurrentSyncVersion(uuid: java.util.UUID, version: Long): Boolean {
+        return getSyncState(uuid)?.version == version
+    }
+
+    fun acquireSyncLock(uuid: java.util.UUID, timeoutSeconds: Int): SyncLock {
+        val connection = getConnection()
+        val lockName = "azisync:$uuid"
+        try {
+            val acquired = connection.prepareStatement("SELECT GET_LOCK(?, ?)").use { statement ->
+                statement.setString(1, lockName)
+                statement.setInt(2, timeoutSeconds.coerceAtLeast(0))
+                statement.executeQuery().use { resultSet -> resultSet.next() && resultSet.getInt(1) == 1 }
+            }
+            if (!acquired) throw SQLException("Timed out acquiring sync lock for $uuid")
+            return SyncLock(connection, lockName)
+        } catch (e: Exception) {
+            connection.close()
+            throw e
+        }
     }
 
     private fun createTables() {

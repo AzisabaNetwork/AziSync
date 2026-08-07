@@ -27,23 +27,42 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
         }.runTaskTimer(plugin, 0L, 20L)
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            var waitCount = 0
+            var syncFailed = false
+            val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
+            val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
+            val handoffGraceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
+
+            // Give the source server's dedicated sync-state writer a short window
+            // to publish "saving" before accepting an older "complete" state.
+            if (handoffGraceMillis > 0) Thread.sleep(handoffGraceMillis)
+            val waitStarted = System.nanoTime()
             
-            // Wait until sync_complete is true
-            while (waitCount < 40) {
+            while (true) {
                 if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
                     return@Runnable
                 }
-                val status = plugin.syncManager.getSyncStatus(uuid)
-                if (status == null || status == "true") {
+                when (val status = plugin.syncManager.getSyncStatus(uuid)) {
+                    null, "complete" -> break
+                    "failed" -> {
+                        syncFailed = true
+                        break
+                    }
+                    "saving" -> Unit
+                    else -> {
+                        plugin.logger.warning("Unknown sync state '$status' for player $playerName")
+                        syncFailed = true
+                        break
+                    }
+                }
+                if (java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted) >= timeoutMillis) {
+                    syncFailed = true
                     break
                 }
-                Thread.sleep(250)
-                waitCount++
+                Thread.sleep(pollMillis)
             }
             
-            if (waitCount >= 40) {
-                plugin.logger.warning("Data sync timeout for player $playerName")
+            if (syncFailed) {
+                plugin.logger.warning("Data sync failed or timed out for player $playerName")
                 if (plugin.config.getBoolean("general.kickOnFailedSync", false)) {
                     Bukkit.getScheduler().runTask(plugin, Runnable {
                         Bukkit.getPlayer(uuid)?.kickPlayer("Data sync timeout. Please reconnect.")

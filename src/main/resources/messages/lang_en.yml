@@ -1,4 +1,4 @@
-prefix: "&8[&bAziSync&8] "
+prefix: "&3&lAziSync &8» &r"
 no_permission: "&cYou don't have permission to use this command."
 unknown_command: "&cUnknown command argument."
 reload_success: "&aAziSync configuration and messages reloaded."

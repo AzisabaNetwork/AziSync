@@ -1,4 +1,4 @@
-prefix: "&8[&bAziSync&8] "
+prefix: "&3&lAziSync &8» &r"
 no_permission: "&cこのコマンドを実行する権限がありません。"
 unknown_command: "&c不明なコマンド引数です。"
 reload_success: "&a設定ファイルと言語ファイルを再読み込みしました。"

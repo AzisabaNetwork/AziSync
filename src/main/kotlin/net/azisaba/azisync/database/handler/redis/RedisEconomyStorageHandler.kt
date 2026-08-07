@@ -71,6 +71,24 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         }
     }
 
+    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double? {
+        return plugin.databaseManager.redisManager?.getResource()?.use {
+            val key = "$prefix$uuid"
+            val result = it.eval(
+                """
+                local money = tonumber(redis.call('HGET', KEYS[1], 'money') or '0')
+                local offline = tonumber(redis.call('HGET', KEYS[1], 'offline_money') or '0')
+                local merged = money + offline
+                redis.call('HSET', KEYS[1], 'money', tostring(merged), 'offline_money', '0.0')
+                return tostring(merged)
+                """.trimIndent(),
+                listOf(key),
+                emptyList<String>()
+            )
+            result?.toString()?.toDoubleOrNull()
+        }
+    }
+
     override fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean {
         plugin.databaseManager.redisManager?.getResource()?.use { 
             it.hset("$prefix$uuid", "sync_complete", status)

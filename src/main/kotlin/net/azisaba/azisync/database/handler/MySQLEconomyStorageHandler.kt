@@ -156,10 +156,18 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
     override fun addOfflineMoney(uuid: UUID, amount: Double): Boolean {
         return try {
             plugin.databaseManager.getConnection().use { conn ->
-                val sql = "UPDATE `$tableName` SET `offline_money` = `offline_money` + ? WHERE `player_uuid` = ?"
+                val sql = """
+                    INSERT INTO `$tableName`
+                    (`player_uuid`, `player_name`, `money`, `offline_money`, `last_seen`, `sync_complete`)
+                    VALUES (?, 'Unknown', 0, ?, ?, 'true')
+                    ON DUPLICATE KEY UPDATE
+                    `offline_money` = `offline_money` + VALUES(`offline_money`),
+                    `last_seen` = VALUES(`last_seen`)
+                """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
-                    stmt.setDouble(1, amount)
-                    stmt.setString(2, uuid.toString())
+                    stmt.setString(1, uuid.toString())
+                    stmt.setDouble(2, amount)
+                    stmt.setString(3, System.currentTimeMillis().toString())
                     stmt.executeUpdate() > 0
                 }
             }
@@ -192,6 +200,44 @@ class MySQLEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
             } catch (e: SQLException) {
                 conn.rollback()
                 plugin.logger.warning("Error consuming offline balance for $uuid: ${e.message}")
+                return null
+            }
+        }
+    }
+
+    override fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double? {
+        plugin.databaseManager.getConnection().use { conn ->
+            conn.autoCommit = false
+            try {
+                val balances = conn.prepareStatement(
+                    "SELECT `money`, `offline_money` FROM `$tableName` WHERE `player_uuid` = ? FOR UPDATE"
+                ).use { stmt ->
+                    stmt.setString(1, uuid.toString())
+                    stmt.executeQuery().use { rs ->
+                        if (rs.next()) rs.getDouble("money") to rs.getDouble("offline_money") else null
+                    }
+                }
+                if (balances == null) {
+                    conn.rollback()
+                    return null
+                }
+
+                val mergedBalance = balances.first + balances.second
+                conn.prepareStatement(
+                    "UPDATE `$tableName` SET `money` = ?, `offline_money` = 0, `last_seen` = ? WHERE `player_uuid` = ?"
+                ).use { stmt ->
+                    stmt.setDouble(1, mergedBalance)
+                    stmt.setString(2, System.currentTimeMillis().toString())
+                    stmt.setString(3, uuid.toString())
+                    if (stmt.executeUpdate() != 1) {
+                        throw SQLException("Economy balance merge updated an unexpected number of rows")
+                    }
+                }
+                conn.commit()
+                return mergedBalance
+            } catch (e: SQLException) {
+                conn.rollback()
+                plugin.logger.warning("Error merging offline balance for $uuid: ${e.message}")
                 return null
             }
         }

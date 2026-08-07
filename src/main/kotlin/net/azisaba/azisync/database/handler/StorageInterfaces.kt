@@ -13,6 +13,7 @@ interface EconomyStorageHandler {
     fun setOfflineMoney(uuid: UUID, amount: Double): Boolean
     fun addOfflineMoney(uuid: UUID, amount: Double): Boolean
     fun consumeOfflineMoney(uuid: UUID): Double?
+    fun mergeOfflineMoneyIntoBalance(uuid: UUID): Double?
     fun setSyncStatus(uuid: UUID, playerName: String, status: String): Boolean
     fun setData(uuid: UUID, playerName: String, money: Double, syncStatus: String): Boolean
 }
