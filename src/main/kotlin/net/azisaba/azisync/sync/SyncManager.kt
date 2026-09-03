@@ -20,6 +20,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class SyncManager(private val plugin: AziSync) {
+    private val maxHealthAttribute: Attribute by lazy {
+        val field = runCatching { Attribute::class.java.getField("MAX_HEALTH") }
+            .getOrElse { Attribute::class.java.getField("GENERIC_MAX_HEALTH") }
+        field.get(null) as Attribute
+    }
     
     private val loadedPlayers = ConcurrentHashMap<UUID, Boolean>()
     private val economyReadyPlayers = ConcurrentHashMap.newKeySet<UUID>()
@@ -98,7 +103,7 @@ class SyncManager(private val plugin: AziSync) {
         val shareAir = plugin.config.getBoolean("general.enableModules.shareAir", false)
         val health = if (shareHealth) player.health else null
         val healthScale = if (shareHealth) player.healthScale else null
-        val maxHealth = if (shareHealth) player.getAttribute(Attribute.MAX_HEALTH)?.baseValue else null
+        val maxHealth = if (shareHealth) player.getAttribute(maxHealthAttribute)?.baseValue else null
         val foodLevel = if (shareFood) player.foodLevel else null
         val saturation = if (shareFood) player.saturation.toString() else null
         val remainingAir = if (shareAir) player.remainingAir else null
@@ -531,10 +536,10 @@ class SyncManager(private val plugin: AziSync) {
                     if (healthData != null) {
                         Bukkit.getScheduler().runTask(plugin, Runnable {
                             if (loadHealth) {
-                                val maxHealthAttribute = player.getAttribute(Attribute.MAX_HEALTH)
-                                maxHealthAttribute?.baseValue = healthData.maxHealth
+                                val maxHealth = player.getAttribute(maxHealthAttribute)
+                                maxHealth?.baseValue = healthData.maxHealth
                                 player.healthScale = healthData.healthScale
-                                val effectiveMaxHealth = maxHealthAttribute?.value ?: healthData.maxHealth
+                                val effectiveMaxHealth = maxHealth?.value ?: healthData.maxHealth
                                 player.health = healthData.health.coerceIn(0.0, effectiveMaxHealth)
                             }
                             if (loadFood) {

@@ -32,12 +32,8 @@ repositories {
     }
 }
 
-configurations.configureEach {
-    exclude(group = "org.bukkit", module = "bukkit")
-}
-
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    compileOnly("com.destroystokyo.paper:paper-api:1.13.2-R0.1-SNAPSHOT")
     compileOnly("com.github.MilkBowl:VaultAPI:1.7")
     compileOnly("de.epiceric:ShopChest:1.13-SNAPSHOT")
     compileOnly("com.acrobot.chestshop:chestshop:3.12.2")
@@ -53,7 +49,7 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(23)
+    jvmToolchain(8)
 }
 
 tasks {
