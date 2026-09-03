@@ -68,9 +68,9 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                     sendHelp(sender)
                     return true
                 }
-                plugin.invseeManager.openInvsee(sender, args[1])
+                plugin.offlineInventoryManager.openInventoryGui(sender, args[1])
             }
-            "ecsee" -> {
+            "ec", "ecsee" -> {
                 if (sender !is org.bukkit.entity.Player) {
                     sender.sendMessage("This command can only be run by a player.")
                     return true
@@ -79,7 +79,18 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                     sendHelp(sender)
                     return true
                 }
-                plugin.invseeManager.openEcsee(sender, args[1])
+                plugin.offlineInventoryManager.openEnderChestGui(sender, args[1])
+            }
+            "armor" -> {
+                if (sender !is org.bukkit.entity.Player) {
+                    sender.sendMessage("This command can only be run by a player.")
+                    return true
+                }
+                if (args.size < 2) {
+                    sendHelp(sender)
+                    return true
+                }
+                plugin.offlineInventoryManager.openArmorGui(sender, args[1])
             }
             else -> {
                 plugin.messageManager.sendMessage(sender, "unknown_command")
@@ -93,9 +104,9 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
         if (!sender.hasPermission("azisync.admin")) return mutableListOf()
         
         if (args.size == 1) {
-            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "invsee", "ecsee", "history", "rollback")
+            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback")
             return subcommands.filter { it.startsWith(args[0].lowercase()) }.toMutableList()
-        } else if (args.size == 2 && (args[0].lowercase() == "save" || args[0].lowercase() == "load" || args[0].lowercase() == "inv" || args[0].lowercase() == "invsee" || args[0].lowercase() == "ecsee" || args[0].lowercase() == "history" || args[0].lowercase() == "rollback")) {
+        } else if (args.size == 2 && (args[0].lowercase() in listOf("save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback"))) {
             return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[1].lowercase()) }.toMutableList()
         }
         return mutableListOf()
@@ -109,6 +120,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
         plugin.messageManager.sendMessage(sender, "help_load")
         plugin.messageManager.sendMessage(sender, "help_invsee")
         plugin.messageManager.sendMessage(sender, "help_ecsee")
+        plugin.messageManager.sendMessage(sender, "help_armor")
         plugin.messageManager.sendMessage(sender, "help_history")
         plugin.messageManager.sendMessage(sender, "help_rollback")
     }

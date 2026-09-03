@@ -3,11 +3,12 @@ package net.azisaba.azisync
 import net.azisaba.azisync.command.AziSyncCommand
 import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.hook.HookManager
+import net.azisaba.azisync.inventory.OfflineInventoryListener
+import net.azisaba.azisync.inventory.OfflineInventoryManager
 import net.azisaba.azisync.listener.PlayerJoinListener
 import net.azisaba.azisync.listener.AdvancementPreloadListener
 import net.azisaba.azisync.listener.PlayerProtectListener
 import net.azisaba.azisync.listener.PlayerQuitListener
-import net.azisaba.azisync.manager.InvseeManager
 import net.azisaba.azisync.sync.SyncManager
 import net.azisaba.azisync.task.DataSaveTask
 import net.azisaba.azisync.util.MessageManager
@@ -29,7 +30,7 @@ class AziSync : JavaPlugin() {
     lateinit var hookManager: HookManager
         private set
 
-    lateinit var invseeManager: InvseeManager
+    lateinit var offlineInventoryManager: OfflineInventoryManager
         private set
 
     override fun onEnable() {
@@ -63,11 +64,13 @@ class AziSync : JavaPlugin() {
         server.pluginManager.registerEvents(AdvancementPreloadListener(this), this)
         server.pluginManager.registerEvents(PlayerQuitListener(this), this)
         server.pluginManager.registerEvents(PlayerProtectListener(this), this)
-        
+
+        offlineInventoryManager = OfflineInventoryManager(this)
+        server.pluginManager.registerEvents(OfflineInventoryListener(this), this)
+
         hookManager = HookManager(this)
         hookManager.registerHooks()
 
-        invseeManager = InvseeManager(this)
         DataSaveTask(this).start()
 
         server.onlinePlayers.forEach {
