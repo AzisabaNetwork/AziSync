@@ -10,6 +10,7 @@ import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Location
+import org.bukkit.attribute.Attribute
 import org.bukkit.entity.Player
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -97,8 +98,7 @@ class SyncManager(private val plugin: AziSync) {
         val shareAir = plugin.config.getBoolean("general.enableModules.shareAir", false)
         val health = if (shareHealth) player.health else null
         val healthScale = if (shareHealth) player.healthScale else null
-        @Suppress("DEPRECATION")
-        val maxHealth = if (shareHealth) player.maxHealth else null
+        val maxHealth = if (shareHealth) player.getAttribute(Attribute.MAX_HEALTH)?.baseValue else null
         val foodLevel = if (shareFood) player.foodLevel else null
         val saturation = if (shareFood) player.saturation.toString() else null
         val remainingAir = if (shareAir) player.remainingAir else null
@@ -531,10 +531,11 @@ class SyncManager(private val plugin: AziSync) {
                     if (healthData != null) {
                         Bukkit.getScheduler().runTask(plugin, Runnable {
                             if (loadHealth) {
-                                @Suppress("DEPRECATION")
-                                player.maxHealth = healthData.maxHealth
+                                val maxHealthAttribute = player.getAttribute(Attribute.MAX_HEALTH)
+                                maxHealthAttribute?.baseValue = healthData.maxHealth
                                 player.healthScale = healthData.healthScale
-                                player.health = healthData.health.coerceIn(0.0, healthData.maxHealth)
+                                val effectiveMaxHealth = maxHealthAttribute?.value ?: healthData.maxHealth
+                                player.health = healthData.health.coerceIn(0.0, effectiveMaxHealth)
                             }
                             if (loadFood) {
                                 player.foodLevel = healthData.food
