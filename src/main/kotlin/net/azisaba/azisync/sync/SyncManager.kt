@@ -494,15 +494,26 @@ class SyncManager(private val plugin: AziSync) {
                         val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor) else null
                         
                         Bukkit.getScheduler().runTask(plugin, Runnable {
+                            if (!player.isOnline) return@Runnable
                             if (contents != null) {
-                                player.inventory.contents = contents
+                                if (contents.size >= 41) {
+                                    val storage = contents.copyOfRange(0, 36)
+                                    val armorFromContents = contents.copyOfRange(36, 40)
+                                    val offhandFromContents = contents[40]
+                                    player.inventory.storageContents = storage
+                                    if (loadArmor) player.inventory.setArmorContents(armorFromContents)
+                                    if (offhandFromContents != null) player.inventory.setItemInOffHand(offhandFromContents)
+                                } else {
+                                    player.inventory.storageContents = contents
+                                }
                                 player.inventory.heldItemSlot = invData.hotbarSlot
                             }
-                            if (armor != null) player.inventory.setArmorContents(armor)
+                            if (loadArmor && armor != null) player.inventory.setArmorContents(armor)
                             if (loadGameMode) {
                                 val gm = GameMode.getByValue(invData.gamemode)
                                 if (gm != null) player.gameMode = gm
                             }
+                            player.updateInventory()
                         })
                     }
                 }
