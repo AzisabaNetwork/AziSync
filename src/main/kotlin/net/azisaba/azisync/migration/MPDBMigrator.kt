@@ -3,6 +3,8 @@ package net.azisaba.azisync.migration
 import net.azisaba.azisync.AziSync
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
+import org.bukkit.configuration.file.YamlConfiguration
+import java.io.File
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.SQLException
@@ -18,6 +20,7 @@ class MPDBMigrator(private val plugin: AziSync) {
         val id: String,
         val displayName: String,
         val mpdbConfigKey: String,
+        val mpdbPropertyKey: String,
         val defaultMpdbTable: String,
         val targetConfigKey: String,
         val defaultTargetTable: String,
@@ -25,11 +28,24 @@ class MPDBMigrator(private val plugin: AziSync) {
         val migrateData: (sourceConn: Connection, targetConn: Connection, sourceTable: String, targetTable: String, onProgress: (processed: Int, total: Int) -> Unit) -> Int
     )
 
+    private data class SourceConnectionInfo(
+        val useMainDatabase: Boolean,
+        val description: String,
+        val host: String = "",
+        val port: Int = 3306,
+        val database: String = "",
+        val username: String = "",
+        val password: String = "",
+        val useSSL: Boolean = false,
+        val mpdbYaml: YamlConfiguration? = null
+    )
+
     private val modules = listOf(
         TableModule(
             id = "inventory",
             displayName = "Inventory",
             mpdbConfigKey = "migration.mpdb.tables.inventory",
+            mpdbPropertyKey = "inventoryTableName",
             defaultMpdbTable = "mpdb_inventory",
             targetConfigKey = "database.TablesNames.inventoryTableName",
             defaultTargetTable = "azisync_inventory",
@@ -105,6 +121,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "enderchest",
             displayName = "EnderChest",
             mpdbConfigKey = "migration.mpdb.tables.enderchest",
+            mpdbPropertyKey = "enderchestTableName",
             defaultMpdbTable = "mpdb_enderchest",
             targetConfigKey = "database.TablesNames.enderChestTableName",
             defaultTargetTable = "azisync_enderchest",
@@ -171,6 +188,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "experience",
             displayName = "Experience",
             mpdbConfigKey = "migration.mpdb.tables.experience",
+            mpdbPropertyKey = "experienceTableName",
             defaultMpdbTable = "mpdb_experience",
             targetConfigKey = "database.TablesNames.experienceTableName",
             defaultTargetTable = "azisync_experience",
@@ -246,6 +264,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "potionEffects",
             displayName = "PotionEffects",
             mpdbConfigKey = "migration.mpdb.tables.potionEffects",
+            mpdbPropertyKey = "potionEffectsTableName",
             defaultMpdbTable = "mpdb_potionEffects",
             targetConfigKey = "database.TablesNames.potionEffectsTableName",
             defaultTargetTable = "azisync_potioneffects",
@@ -312,6 +331,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "healthFoodAir",
             displayName = "HealthFoodAir",
             mpdbConfigKey = "migration.mpdb.tables.healthFoodAir",
+            mpdbPropertyKey = "healthFoodAirTableName",
             defaultMpdbTable = "mpdb_health_food_air",
             targetConfigKey = "database.TablesNames.healthFoodAirTableName",
             defaultTargetTable = "azisync_healthfoodair",
@@ -396,6 +416,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "location",
             displayName = "Location",
             mpdbConfigKey = "migration.mpdb.tables.location",
+            mpdbPropertyKey = "locationTableName",
             defaultMpdbTable = "mpdb_location",
             targetConfigKey = "database.TablesNames.locationTableName",
             defaultTargetTable = "azisync_location",
@@ -480,6 +501,7 @@ class MPDBMigrator(private val plugin: AziSync) {
             id = "economy",
             displayName = "Economy",
             mpdbConfigKey = "migration.mpdb.tables.economy",
+            mpdbPropertyKey = "economyTableName",
             defaultMpdbTable = "mpdb_economy",
             targetConfigKey = "database.TablesNames.economyTableName",
             defaultTargetTable = "azisync_economy",
@@ -547,18 +569,113 @@ class MPDBMigrator(private val plugin: AziSync) {
         )
     )
 
-    private fun getSourceConnection(): Connection {
+    private fun resolveSourceInfo(): SourceConnectionInfo {
         val config = plugin.config
-        val useMain = config.getBoolean("migration.mpdb.useMainDatabase", true)
-        if (useMain) {
+        val mpdbConfigFile = File(plugin.dataFolder.parentFile, "MysqlPlayerDataBridge/config.yml")
+        val mpdbYaml = if (mpdbConfigFile.exists()) {
+            try {
+                YamlConfiguration.loadConfiguration(mpdbConfigFile)
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+
+        val autoDetect = config.getBoolean("migration.mpdb.autoDetectFromPlugin", true)
+        val hasManualConfig = config.contains("migration.mpdb.host")
+        val explicitlyDisabledMain = config.contains("migration.mpdb.useMainDatabase") && !config.getBoolean("migration.mpdb.useMainDatabase")
+
+        // 1. If manual host is configured in AziSync and autoDetect is disabled or no mpdb config exists
+        if (hasManualConfig && (!autoDetect || mpdbYaml == null)) {
+            val host = config.getString("migration.mpdb.host", "localhost")!!
+            val port = config.getInt("migration.mpdb.port", 3306)
+            val dbName = config.getString("migration.mpdb.database")
+                ?: config.getString("migration.mpdb.databaseName", "mpdb")!!
+            val username = config.getString("migration.mpdb.username")
+                ?: config.getString("migration.mpdb.user", "azisync")!!
+            val password = config.getString("migration.mpdb.password", "password")!!
+            val useSSL = config.getBoolean("migration.mpdb.useSSL", config.getBoolean("migration.mpdb.sslEnabled", false))
+            return SourceConnectionInfo(
+                useMainDatabase = false,
+                description = "$dbName@$host:$port (AziSync config)",
+                host = host,
+                port = port,
+                database = dbName,
+                username = username,
+                password = password,
+                useSSL = useSSL,
+                mpdbYaml = mpdbYaml
+            )
+        }
+
+        // 2. Auto-detect from plugins/MysqlPlayerDataBridge/config.yml
+        if (autoDetect && mpdbYaml != null && mpdbYaml.contains("database.mysql.host")) {
+            val host = mpdbYaml.getString("database.mysql.host", "localhost")!!
+            val port = mpdbYaml.getInt("database.mysql.port", 3306)
+            val dbName = mpdbYaml.getString("database.mysql.databaseName", "life_userdata")!!
+            val username = mpdbYaml.getString("database.mysql.user", "life_userdata")!!
+            val password = mpdbYaml.getString("database.mysql.password", "")!!
+            val useSSL = mpdbYaml.getBoolean("database.mysql.sslEnabled", false)
+            return SourceConnectionInfo(
+                useMainDatabase = false,
+                description = "$dbName@$host:$port (Auto-detected from MysqlPlayerDataBridge)",
+                host = host,
+                port = port,
+                database = dbName,
+                username = username,
+                password = password,
+                useSSL = useSSL,
+                mpdbYaml = mpdbYaml
+            )
+        }
+
+        // 3. Fallback to manual host in AziSync if present
+        if (hasManualConfig || explicitlyDisabledMain) {
+            val host = config.getString("migration.mpdb.host", "localhost")!!
+            val port = config.getInt("migration.mpdb.port", 3306)
+            val dbName = config.getString("migration.mpdb.database")
+                ?: config.getString("migration.mpdb.databaseName", "mpdb")!!
+            val username = config.getString("migration.mpdb.username")
+                ?: config.getString("migration.mpdb.user", "azisync")!!
+            val password = config.getString("migration.mpdb.password", "password")!!
+            val useSSL = config.getBoolean("migration.mpdb.useSSL", config.getBoolean("migration.mpdb.sslEnabled", false))
+            return SourceConnectionInfo(
+                useMainDatabase = false,
+                description = "$dbName@$host:$port (AziSync config)",
+                host = host,
+                port = port,
+                database = dbName,
+                username = username,
+                password = password,
+                useSSL = useSSL,
+                mpdbYaml = mpdbYaml
+            )
+        }
+
+        // 4. Fallback to AziSync Main Database
+        val mainDbName = config.getString("database.databaseName", "azisync")!!
+        val mainHost = config.getString("database.host", "localhost")!!
+        return SourceConnectionInfo(
+            useMainDatabase = true,
+            description = "$mainDbName@$mainHost (AziSync Main Database)",
+            mpdbYaml = mpdbYaml
+        )
+    }
+
+    private fun getConfiguredMpdbTable(module: TableModule, mpdbYaml: YamlConfiguration?): String {
+        // 1. AziSync config: migration.mpdb.tables.<id>
+        plugin.config.getString(module.mpdbConfigKey)?.let { return it }
+        // 2. AziSync config: migration.mpdb.TablesNames.<mpdbPropertyKey>
+        plugin.config.getString("migration.mpdb.TablesNames.${module.mpdbPropertyKey}")?.let { return it }
+        // 3. MPDB config file: database.mysql.TablesNames.<mpdbPropertyKey>
+        mpdbYaml?.getString("database.mysql.TablesNames.${module.mpdbPropertyKey}")?.let { return it }
+        // 4. Default
+        return module.defaultMpdbTable
+    }
+
+    private fun getSourceConnection(info: SourceConnectionInfo): Connection {
+        if (info.useMainDatabase) {
             return plugin.databaseManager.getConnection()
         }
-        val host = config.getString("migration.mpdb.host", "localhost")
-        val port = config.getInt("migration.mpdb.port", 3306)
-        val dbName = config.getString("migration.mpdb.database", "mpdb")
-        val username = config.getString("migration.mpdb.username", "azisync")
-        val password = config.getString("migration.mpdb.password", "password")
-        val useSSL = config.getBoolean("migration.mpdb.useSSL", false)
 
         try {
             Class.forName("com.mysql.cj.jdbc.Driver")
@@ -568,8 +685,8 @@ class MPDBMigrator(private val plugin: AziSync) {
             } catch (_: ClassNotFoundException) {}
         }
 
-        val url = "jdbc:mysql://$host:$port/$dbName?useSSL=$useSSL&allowPublicKeyRetrieval=true&characterEncoding=utf8&rewriteBatchedStatements=true"
-        return DriverManager.getConnection(url, username, password)
+        val url = "jdbc:mysql://${info.host}:${info.port}/${info.database}?useSSL=${info.useSSL}&allowPublicKeyRetrieval=true&characterEncoding=utf8&rewriteBatchedStatements=true"
+        return DriverManager.getConnection(url, info.username, info.password)
     }
 
     private fun findActualTableName(conn: Connection, configuredName: String): String? {
@@ -608,13 +725,14 @@ class MPDBMigrator(private val plugin: AziSync) {
 
     fun scan(sender: CommandSender) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            plugin.messageManager.sendMessage(sender, "migrate_scanning")
+            val sourceInfo = resolveSourceInfo()
+            plugin.messageManager.sendMessage(sender, "migrate_scanning", mapOf("{target}" to sourceInfo.description))
             try {
-                getSourceConnection().use { conn ->
+                getSourceConnection(sourceInfo).use { conn ->
                     plugin.messageManager.sendMessage(sender, "migrate_scan_header")
                     var foundCount = 0
                     for (module in modules) {
-                        val configuredName = plugin.config.getString(module.mpdbConfigKey, module.defaultMpdbTable) ?: module.defaultMpdbTable
+                        val configuredName = getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)
                         val actualName = findActualTableName(conn, configuredName)
                         if (actualName != null) {
                             val count = getRecordCount(conn, actualName)
@@ -644,7 +762,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                     }
                 }
             } catch (e: Exception) {
-                plugin.logger.severe("Error scanning MPDB database: ${e.message}")
+                plugin.logger.severe("Error scanning MPDB database (${sourceInfo.description}): ${e.message}")
                 e.printStackTrace()
                 plugin.messageManager.sendMessage(
                     sender,
@@ -663,18 +781,19 @@ class MPDBMigrator(private val plugin: AziSync) {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
+                val sourceInfo = resolveSourceInfo()
                 plugin.messageManager.sendMessage(sender, "migrate_started")
-                plugin.logger.info("Starting MPDB data migration...")
+                plugin.logger.info("Starting MPDB data migration from ${sourceInfo.description}...")
 
                 var totalMigrated = 0
 
-                getSourceConnection().use { sourceConn ->
+                getSourceConnection(sourceInfo).use { sourceConn ->
                     plugin.databaseManager.getConnection().use { targetConn ->
                         try {
                             targetConn.autoCommit = false
 
                             for (module in modules) {
-                                val configuredName = plugin.config.getString(module.mpdbConfigKey, module.defaultMpdbTable) ?: module.defaultMpdbTable
+                                val configuredName = getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)
                                 val actualSourceTable = findActualTableName(sourceConn, configuredName) ?: continue
                                 val targetTable = plugin.config.getString(module.targetConfigKey, module.defaultTargetTable) ?: module.defaultTargetTable
 
