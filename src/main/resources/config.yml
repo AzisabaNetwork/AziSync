@@ -96,3 +96,25 @@ debugMessage:
   EconomySync: false
   InventorySync: false
   HealthSync: false
+
+# Data migration from other plugins
+migration:
+  mpdb:
+    # Set to true to use the database connection configured above (same host/user/password/database)
+    useMainDatabase: true
+    # Connection settings when useMainDatabase is false
+    host: localhost
+    port: 3306
+    database: "mpdb"
+    username: "azisync"
+    password: "password"
+    useSSL: false
+    # Table names for MPDB
+    tables:
+      inventory: "mpdb_inventory"
+      enderchest: "mpdb_enderchest"
+      experience: "mpdb_experience"
+      potionEffects: "mpdb_potionEffects"
+      healthFoodAir: "mpdb_health_food_air"
+      location: "mpdb_location"
+      economy: "mpdb_economy"

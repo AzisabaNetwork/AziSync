@@ -5,6 +5,7 @@ import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.hook.HookManager
 import net.azisaba.azisync.inventory.OfflineInventoryListener
 import net.azisaba.azisync.inventory.OfflineInventoryManager
+import net.azisaba.azisync.migration.MPDBMigrator
 import net.azisaba.azisync.listener.PlayerJoinListener
 import net.azisaba.azisync.listener.AdvancementPreloadListener
 import net.azisaba.azisync.listener.PlayerProtectListener
@@ -33,6 +34,9 @@ class AziSync : JavaPlugin() {
     lateinit var offlineInventoryManager: OfflineInventoryManager
         private set
 
+    lateinit var mpdbMigrator: MPDBMigrator
+        private set
+
     override fun onEnable() {
         saveDefaultConfig()
         if (!initializeRuntime()) {
@@ -42,6 +46,10 @@ class AziSync : JavaPlugin() {
 
         val commandExecutor = AziSyncCommand(this)
         getCommand("azisync")?.apply {
+            setExecutor(commandExecutor)
+            tabCompleter = commandExecutor
+        }
+        getCommand("inv")?.apply {
             setExecutor(commandExecutor)
             tabCompleter = commandExecutor
         }
@@ -67,6 +75,8 @@ class AziSync : JavaPlugin() {
 
         offlineInventoryManager = OfflineInventoryManager(this)
         server.pluginManager.registerEvents(OfflineInventoryListener(this), this)
+
+        mpdbMigrator = MPDBMigrator(this)
 
         hookManager = HookManager(this)
         hookManager.registerHooks()

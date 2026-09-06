@@ -6,11 +6,26 @@ import org.bukkit.command.Command
 import org.bukkit.command.CommandExecutor
 import org.bukkit.command.CommandSender
 import org.bukkit.command.TabCompleter
+import org.bukkit.entity.Player
 
 class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabCompleter {
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
         if (!sender.hasPermission("azisync.admin")) {
             plugin.messageManager.sendMessage(sender, "no_permission")
+            return true
+        }
+
+        // 単体コマンド (/inv, /invsee) のハンドリング
+        if (command.name.lowercase() in listOf("inv", "invsee")) {
+            if (sender !is Player) {
+                sender.sendMessage("This command can only be run by a player.")
+                return true
+            }
+            if (args.isEmpty()) {
+                plugin.messageManager.sendMessage(sender, "inv_usage")
+                return true
+            }
+            plugin.offlineInventoryManager.openInventoryGui(sender, args[0])
             return true
         }
 
@@ -60,7 +75,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 plugin.syncManager.loadData(target)
             }
             "inv", "invsee" -> {
-                if (sender !is org.bukkit.entity.Player) {
+                if (sender !is Player) {
                     sender.sendMessage("This command can only be run by a player.")
                     return true
                 }
@@ -71,7 +86,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 plugin.offlineInventoryManager.openInventoryGui(sender, args[1])
             }
             "ec", "ecsee" -> {
-                if (sender !is org.bukkit.entity.Player) {
+                if (sender !is Player) {
                     sender.sendMessage("This command can only be run by a player.")
                     return true
                 }
@@ -82,7 +97,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 plugin.offlineInventoryManager.openEnderChestGui(sender, args[1])
             }
             "armor" -> {
-                if (sender !is org.bukkit.entity.Player) {
+                if (sender !is Player) {
                     sender.sendMessage("This command can only be run by a player.")
                     return true
                 }
@@ -91,6 +106,19 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                     return true
                 }
                 plugin.offlineInventoryManager.openArmorGui(sender, args[1])
+            }
+            "migrate" -> {
+                if (args.size >= 2 && args[1].lowercase() == "mpdb") {
+                    if (args.size >= 3 && args[2].lowercase() == "confirm") {
+                        plugin.mpdbMigrator.migrate(sender)
+                    } else {
+                        plugin.mpdbMigrator.scan(sender)
+                    }
+                } else if (args.size == 2 && args[1].lowercase() == "confirm") {
+                    plugin.mpdbMigrator.migrate(sender)
+                } else {
+                    plugin.mpdbMigrator.scan(sender)
+                }
             }
             else -> {
                 plugin.messageManager.sendMessage(sender, "unknown_command")
@@ -102,12 +130,26 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
 
     override fun onTabComplete(sender: CommandSender, command: Command, alias: String, args: Array<out String>): MutableList<String>? {
         if (!sender.hasPermission("azisync.admin")) return mutableListOf()
-        
+
+        if (command.name.lowercase() in listOf("inv", "invsee")) {
+            if (args.size == 1) {
+                return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[0].lowercase()) }.toMutableList()
+            }
+            return mutableListOf()
+        }
+
         if (args.size == 1) {
-            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback")
+            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback", "migrate")
             return subcommands.filter { it.startsWith(args[0].lowercase()) }.toMutableList()
-        } else if (args.size == 2 && (args[0].lowercase() in listOf("save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback"))) {
-            return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[1].lowercase()) }.toMutableList()
+        } else if (args.size == 2) {
+            if (args[0].lowercase() == "migrate") {
+                return listOf("mpdb").filter { it.startsWith(args[1].lowercase()) }.toMutableList()
+            }
+            if (args[0].lowercase() in listOf("save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback")) {
+                return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[1].lowercase()) }.toMutableList()
+            }
+        } else if (args.size == 3 && args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {
+            return listOf("confirm").filter { it.startsWith(args[2].lowercase()) }.toMutableList()
         }
         return mutableListOf()
     }
@@ -123,5 +165,6 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
         plugin.messageManager.sendMessage(sender, "help_armor")
         plugin.messageManager.sendMessage(sender, "help_history")
         plugin.messageManager.sendMessage(sender, "help_rollback")
+        plugin.messageManager.sendMessage(sender, "help_migrate")
     }
 }
