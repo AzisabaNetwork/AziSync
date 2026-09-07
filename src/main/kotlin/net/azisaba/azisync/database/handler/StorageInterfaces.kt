@@ -11,7 +11,7 @@ data class EconomyMergeResult(
 interface EconomyStorageHandler {
     fun getSyncStatus(uuid: UUID): String?
     fun hasAccount(uuid: UUID): Boolean
-    fun createAccount(uuid: UUID, playerName: String): Boolean
+    fun createAccount(uuid: UUID, playerName: String, initialBalance: Double = 0.0): Boolean
     fun getData(uuid: UUID, playerName: String): DatabaseEconomyData?
     fun getBalance(uuid: UUID): Double?
     fun setBalance(uuid: UUID, balance: Double): Boolean

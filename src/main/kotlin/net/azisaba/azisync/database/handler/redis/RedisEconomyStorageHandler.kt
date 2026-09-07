@@ -17,11 +17,11 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
         return plugin.databaseManager.redisManager?.getResource()?.use { it.exists("$prefix$uuid") } ?: false
     }
 
-    override fun createAccount(uuid: UUID, playerName: String): Boolean {
+    override fun createAccount(uuid: UUID, playerName: String, initialBalance: Double): Boolean {
         plugin.databaseManager.redisManager?.getResource()?.use { 
             val key = "$prefix$uuid"
             it.hset(key, "player_name", playerName)
-            it.hset(key, "money", "0.0")
+            it.hset(key, "money", initialBalance.toString())
             it.hset(key, "offline_money", "0.0")
             it.hset(key, "sync_complete", "true")
             it.hset(key, "last_seen", System.currentTimeMillis().toString())
@@ -30,7 +30,14 @@ class RedisEconomyStorageHandler(private val plugin: AziSync) : EconomyStorageHa
     }
 
     override fun getData(uuid: UUID, playerName: String): DatabaseEconomyData? {
-        if (!hasAccount(uuid)) createAccount(uuid, playerName)
+        if (!hasAccount(uuid)) {
+            val player = org.bukkit.Bukkit.getPlayer(uuid)
+            val econ = plugin.hookManager.economyHook.getEconomy()
+            val initialBalance = if (player != null && player.isOnline && econ != null) {
+                econ.getBalance(player).coerceAtLeast(0.0)
+            } else 0.0
+            createAccount(uuid, playerName, initialBalance)
+        }
         val data = plugin.databaseManager.redisManager?.getResource()?.use { it.hgetAll("$prefix$uuid") } ?: return null
         if (data.isEmpty()) return null
         return DatabaseEconomyData(

@@ -59,12 +59,16 @@ class OfflineInventoryManager(private val plugin: AziSync) {
         val tableName = plugin.config.getString("database.TablesNames.inventoryTableName", "azisync_inventory") ?: "azisync_inventory"
         try {
             plugin.databaseManager.getConnection().use { conn ->
-                val sql = "SELECT `player_uuid` FROM `$tableName` WHERE `player_name` = ? LIMIT 1"
+                val sql = "SELECT `player_uuid` FROM `$tableName` WHERE LOWER(`player_name`) = LOWER(?) LIMIT 1"
                 conn.prepareStatement(sql).use { stmt ->
                     stmt.setString(1, name)
                     stmt.executeQuery().use { rs ->
                         if (rs.next()) {
-                            return UUID.fromString(rs.getString("player_uuid"))
+                            val raw = rs.getString("player_uuid")
+                            val normalized = net.azisaba.azisync.migration.MPDBMigrator.normalizeUuid(raw)
+                            if (normalized != null) {
+                                return UUID.fromString(normalized)
+                            }
                         }
                     }
                 }

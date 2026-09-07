@@ -135,7 +135,8 @@ class SyncManager(private val plugin: AziSync) {
         // Economy
         val shareEconomy = plugin.config.getBoolean("general.enableModules.shareEconomy", true)
         val econ = plugin.hookManager.economyHook.getEconomy()
-        val balance = if (shareEconomy && econ != null && economyReadyPlayers.contains(uuid)) {
+        val isReady = economyReadyPlayers.contains(uuid) || isLoaded(player)
+        val balance = if (shareEconomy && econ != null && isReady) {
             econ.getBalance(player).also {
                 EconomyAudit.info(plugin, "ECONOMY_SAVE_CAPTURED", uuid, playerName,
                     "operationId" to economyOperationId, "balance" to it,
@@ -146,7 +147,9 @@ class SyncManager(private val plugin: AziSync) {
                 EconomyAudit.warning(plugin, "ECONOMY_SAVE_SKIPPED", uuid, playerName,
                     details = arrayOf(
                         "providerAvailable" to (econ != null),
-                        "economyReady" to economyReadyPlayers.contains(uuid),
+                        "economyReady" to isReady,
+                        "readySet" to economyReadyPlayers.contains(uuid),
+                        "isLoaded" to isLoaded(player),
                         "syncComplete" to syncComplete,
                         "operationId" to economyOperationId
                     ))
@@ -542,66 +545,78 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Experience
                 if (plugin.config.getBoolean("general.enableModules.shareExperience", true)) {
-                    val expData = plugin.databaseManager.experienceHandler.getData(uuid, playerName)
-                    if (expData != null) {
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            player.exp = expData.exp
-                            player.level = expData.expLvl
-                            player.totalExperience = expData.totalExp
-                        })
+                    try {
+                        val expData = plugin.databaseManager.experienceHandler.getData(uuid, playerName)
+                        if (expData != null) {
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                player.exp = expData.exp
+                                player.level = expData.expLvl
+                                player.totalExperience = expData.totalExp
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load experience for $playerName: ${e.message}")
                     }
                 }
 
                 // Health/Food/Air
                 if (loadHealth || loadFood || loadAir) {
-                    val healthData = plugin.databaseManager.healthHandler.getData(uuid, playerName)
-                    if (healthData != null) {
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            if (!player.isOnline) return@Runnable
-                            try {
-                                if (loadHealth) {
-                                    val maxHealth = player.getAttribute(maxHealthAttribute)
-                                    if (healthData.maxHealth > 0.0) {
-                                        maxHealth?.baseValue = healthData.maxHealth
-                                    }
-                                    if (healthData.healthScale > 0.0) {
+                    try {
+                        val healthData = plugin.databaseManager.healthHandler.getData(uuid, playerName)
+                        if (healthData != null) {
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                if (!player.isOnline) return@Runnable
+                                try {
+                                    if (loadHealth) {
+                                        val maxHealth = player.getAttribute(maxHealthAttribute)
+                                        if (healthData.maxHealth > 0.0) {
+                                            maxHealth?.baseValue = healthData.maxHealth
+                                        }
+                                        if (healthData.healthScale > 0.0) {
+                                            try {
+                                                player.isHealthScaled = true
+                                                player.healthScale = healthData.healthScale
+                                            } catch (_: Exception) {}
+                                        } else {
+                                            player.isHealthScaled = false
+                                        }
+                                        val effectiveMaxHealth = maxHealth?.value ?: (if (healthData.maxHealth > 0.0) healthData.maxHealth else 20.0)
+                                        val targetHealth = healthData.health.coerceIn(0.1, effectiveMaxHealth)
                                         try {
-                                            player.isHealthScaled = true
-                                            player.healthScale = healthData.healthScale
+                                            player.health = targetHealth
                                         } catch (_: Exception) {}
-                                    } else {
-                                        player.isHealthScaled = false
                                     }
-                                    val effectiveMaxHealth = maxHealth?.value ?: (if (healthData.maxHealth > 0.0) healthData.maxHealth else 20.0)
-                                    val targetHealth = healthData.health.coerceIn(0.1, effectiveMaxHealth)
-                                    try {
-                                        player.health = targetHealth
-                                    } catch (_: Exception) {}
+                                    if (loadFood) {
+                                        player.foodLevel = healthData.food.coerceIn(0, 20)
+                                        player.saturation = (healthData.saturation.toFloatOrNull() ?: 5.0f).coerceIn(0.0f, 20.0f)
+                                    }
+                                    if (loadAir) {
+                                        player.maximumAir = if (healthData.maxAir > 0) healthData.maxAir else 300
+                                        player.remainingAir = healthData.air.coerceIn(0, player.maximumAir)
+                                    }
+                                } catch (e: Exception) {
+                                    plugin.logger.warning("Failed to apply health/food/air for ${player.name}: ${e.message}")
                                 }
-                                if (loadFood) {
-                                    player.foodLevel = healthData.food.coerceIn(0, 20)
-                                    player.saturation = (healthData.saturation.toFloatOrNull() ?: 5.0f).coerceIn(0.0f, 20.0f)
-                                }
-                                if (loadAir) {
-                                    player.maximumAir = if (healthData.maxAir > 0) healthData.maxAir else 300
-                                    player.remainingAir = healthData.air.coerceIn(0, player.maximumAir)
-                                }
-                            } catch (e: Exception) {
-                                plugin.logger.warning("Failed to apply health/food/air for ${player.name}: ${e.message}")
-                            }
-                        })
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load health/food/air for $playerName: ${e.message}")
                     }
                 }
 
                 // Potion Effects
                 if (plugin.config.getBoolean("general.enableModules.sharePotionEffects", true)) {
-                    val potionData = plugin.databaseManager.potionEffectsHandler.getData(uuid, playerName)
-                    if (potionData != null && potionData.potionEffects != "none") {
-                        val effects = EffectSerializer.fromBase64(potionData.potionEffects)
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            player.activePotionEffects.forEach { player.removePotionEffect(it.type) }
-                            player.addPotionEffects(effects)
-                        })
+                    try {
+                        val potionData = plugin.databaseManager.potionEffectsHandler.getData(uuid, playerName)
+                        if (potionData != null && potionData.potionEffects != "none") {
+                            val effects = EffectSerializer.fromBase64(potionData.potionEffects)
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                player.activePotionEffects.forEach { player.removePotionEffect(it.type) }
+                                player.addPotionEffects(effects)
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load potion effects for $playerName: ${e.message}")
                     }
                 }
 
@@ -618,113 +633,148 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Location
                 if (loadLocation || loadBedSpawn) {
-                    val locData = plugin.databaseManager.locationHandler.getData(uuid, playerName)
-                    if (locData != null) {
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            if (loadLocation) {
-                                val world = Bukkit.getWorld(locData.world)
-                                if (world != null) {
-                                    player.teleport(Location(world, locData.x, locData.y, locData.z, locData.yaw, locData.pitch))
-                                }
-                            }
-                            if (loadBedSpawn && locData.bedSpawn != "none") {
-                                val split = locData.bedSpawn.split(",")
-                                if (split.size == 4) {
-                                    val bedWorld = Bukkit.getWorld(split[0])
-                                    if (bedWorld != null) {
-                                        player.setBedSpawnLocation(Location(bedWorld, split[1].toDouble(), split[2].toDouble(), split[3].toDouble()), true)
+                    try {
+                        val locData = plugin.databaseManager.locationHandler.getData(uuid, playerName)
+                        if (locData != null) {
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                if (loadLocation) {
+                                    val world = Bukkit.getWorld(locData.world)
+                                    if (world != null) {
+                                        player.teleport(Location(world, locData.x, locData.y, locData.z, locData.yaw, locData.pitch))
                                     }
                                 }
-                            }
-                        })
+                                if (loadBedSpawn && locData.bedSpawn != "none") {
+                                    val split = locData.bedSpawn.split(",")
+                                    if (split.size == 4) {
+                                        val bedWorld = Bukkit.getWorld(split[0])
+                                        if (bedWorld != null) {
+                                            player.setBedSpawnLocation(Location(bedWorld, split[1].toDouble(), split[2].toDouble(), split[3].toDouble()), true)
+                                        }
+                                    }
+                                }
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load location for $playerName: ${e.message}")
                     }
                 }
 
                 // Economy
                 if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
-                    val econ = plugin.hookManager.economyHook.getEconomy()
-                    if (econ != null) {
-                        EconomyAudit.info(plugin, "ECONOMY_LOAD_STARTED", uuid, playerName,
-                            "operationId" to economyOperationId, "provider" to econ.name)
-                        val econData = plugin.databaseManager.economyHandler.getData(uuid, playerName)
-                        if (econData != null) {
-                            val mergeResult = plugin.databaseManager.economyHandler.mergeOfflineMoneyIntoBalance(uuid)
-                            if (mergeResult == null) {
-                                EconomyAudit.severe(plugin, "ECONOMY_LOAD_PREPARE_FAILED", uuid, playerName,
-                                    details = arrayOf("provider" to econ.name, "storedBalance" to econData.money,
-                                        "observedOfflineDelta" to econData.offlineMoney,
-                                        "operationId" to economyOperationId))
-                            } else {
-                            Bukkit.getScheduler().runTask(plugin, Runnable {
-                                if (!player.isOnline) {
-                                    EconomyAudit.warning(plugin, "ECONOMY_VAULT_APPLY_SKIPPED_OFFLINE", uuid, playerName,
-                                        details = arrayOf("targetBalance" to mergeResult.mergedBalance,
-                                            "provider" to econ.name, "operationId" to economyOperationId))
-                                    return@Runnable
+                    try {
+                        val econ = plugin.hookManager.economyHook.getEconomy()
+                        if (econ != null) {
+                            EconomyAudit.info(plugin, "ECONOMY_LOAD_STARTED", uuid, playerName,
+                                "operationId" to economyOperationId, "provider" to econ.name)
+                            if (!plugin.databaseManager.economyHandler.hasAccount(uuid)) {
+                                val currentVaultBalance = if (player.isOnline) econ.getBalance(player).coerceAtLeast(0.0) else 0.0
+                                plugin.databaseManager.economyHandler.createAccount(uuid, playerName, currentVaultBalance)
+                                if (currentVaultBalance > 0.0) {
+                                    EconomyAudit.info(plugin, "ECONOMY_ACCOUNT_INITIALIZED_FROM_VAULT", uuid, playerName,
+                                        "initialBalance" to currentVaultBalance, "provider" to econ.name)
                                 }
-                                val currentBalance = econ.getBalance(player)
-                                val difference = mergeResult.mergedBalance - currentBalance
-                                EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_STARTED", uuid, playerName,
-                                    "provider" to econ.name,
-                                    "operationId" to economyOperationId,
-                                    "currentBalance" to currentBalance,
-                                    "storedBalance" to mergeResult.storedBalance,
-                                    "offlineDelta" to mergeResult.offlineDelta,
-                                    "targetBalance" to mergeResult.mergedBalance,
-                                    "difference" to difference)
-                                val succeeded = when {
-                                    difference > 0 -> econ.depositPlayer(player, difference).transactionSuccess()
-                                    difference < 0 -> econ.withdrawPlayer(player, -difference).transactionSuccess()
-                                    else -> true
-                                }
-                                val resultingBalance = econ.getBalance(player)
-                                val balanceMatches = kotlin.math.abs(resultingBalance - mergeResult.mergedBalance) < 0.000001
-                                if (succeeded && balanceMatches) {
-                                    economyReadyPlayers.add(uuid)
-                                    EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_SUCCEEDED", uuid, playerName,
-                                        "provider" to econ.name,
-                                        "operationId" to economyOperationId,
-                                        "previousBalance" to currentBalance,
-                                        "offlineDelta" to mergeResult.offlineDelta,
-                                        "targetBalance" to mergeResult.mergedBalance,
-                                        "resultingBalance" to resultingBalance)
+                            }
+                            val econData = plugin.databaseManager.economyHandler.getData(uuid, playerName)
+                            if (econData != null) {
+                                val mergeResult = plugin.databaseManager.economyHandler.mergeOfflineMoneyIntoBalance(uuid)
+                                if (mergeResult == null) {
+                                    EconomyAudit.severe(plugin, "ECONOMY_LOAD_PREPARE_FAILED", uuid, playerName,
+                                        details = arrayOf("provider" to econ.name, "storedBalance" to econData.money,
+                                            "observedOfflineDelta" to econData.offlineMoney,
+                                            "operationId" to economyOperationId))
                                 } else {
-                                    EconomyAudit.severe(plugin, "ECONOMY_VAULT_APPLY_FAILED", uuid, playerName,
-                                        details = arrayOf(
+                                    Bukkit.getScheduler().runTask(plugin, Runnable {
+                                        if (!player.isOnline) {
+                                            EconomyAudit.warning(plugin, "ECONOMY_VAULT_APPLY_SKIPPED_OFFLINE", uuid, playerName,
+                                                details = arrayOf("targetBalance" to mergeResult.mergedBalance,
+                                                    "provider" to econ.name, "operationId" to economyOperationId))
+                                            return@Runnable
+                                        }
+                                        val currentBalance = econ.getBalance(player)
+                                        val difference = mergeResult.mergedBalance - currentBalance
+                                        EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_STARTED", uuid, playerName,
                                             "provider" to econ.name,
                                             "operationId" to economyOperationId,
-                                            "transactionSucceeded" to succeeded,
-                                            "balanceMatches" to balanceMatches,
-                                            "previousBalance" to currentBalance,
-                                            "difference" to difference,
+                                            "currentBalance" to currentBalance,
+                                            "storedBalance" to mergeResult.storedBalance,
+                                            "offlineDelta" to mergeResult.offlineDelta,
                                             "targetBalance" to mergeResult.mergedBalance,
-                                            "resultingBalance" to resultingBalance,
-                                            "safetyAction" to "economy_saving_disabled_for_session"
-                                        ))
+                                            "difference" to difference)
+                                        val isNegligible = kotlin.math.abs(difference) < 0.01
+                                        val succeeded = when {
+                                            isNegligible -> true
+                                            difference > 0 -> econ.depositPlayer(player, difference).transactionSuccess()
+                                            difference < 0 -> econ.withdrawPlayer(player, -difference).transactionSuccess()
+                                            else -> true
+                                        }
+                                        val resultingBalance = econ.getBalance(player)
+                                        val balanceMatches = kotlin.math.abs(resultingBalance - mergeResult.mergedBalance) < 0.01
+                                        if (succeeded) {
+                                            economyReadyPlayers.add(uuid)
+                                            if (balanceMatches) {
+                                                EconomyAudit.info(plugin, "ECONOMY_VAULT_APPLY_SUCCEEDED", uuid, playerName,
+                                                    "provider" to econ.name,
+                                                    "operationId" to economyOperationId,
+                                                    "previousBalance" to currentBalance,
+                                                    "offlineDelta" to mergeResult.offlineDelta,
+                                                    "targetBalance" to mergeResult.mergedBalance,
+                                                    "resultingBalance" to resultingBalance)
+                                            } else {
+                                                EconomyAudit.warning(plugin, "ECONOMY_VAULT_APPLY_ROUNDING_MISMATCH", uuid, playerName,
+                                                    details = arrayOf(
+                                                        "provider" to econ.name,
+                                                        "operationId" to economyOperationId,
+                                                        "previousBalance" to currentBalance,
+                                                        "difference" to difference,
+                                                        "targetBalance" to mergeResult.mergedBalance,
+                                                        "resultingBalance" to resultingBalance
+                                                    ))
+                                            }
+                                        } else {
+                                            EconomyAudit.severe(plugin, "ECONOMY_VAULT_APPLY_FAILED", uuid, playerName,
+                                                details = arrayOf(
+                                                    "provider" to econ.name,
+                                                    "operationId" to economyOperationId,
+                                                    "transactionSucceeded" to succeeded,
+                                                    "balanceMatches" to balanceMatches,
+                                                    "previousBalance" to currentBalance,
+                                                    "difference" to difference,
+                                                    "targetBalance" to mergeResult.mergedBalance,
+                                                    "resultingBalance" to resultingBalance,
+                                                    "safetyAction" to "economy_saving_disabled_for_session"
+                                                ))
+                                        }
+                                    })
                                 }
-                            })
+                            } else {
+                                EconomyAudit.severe(plugin, "ECONOMY_LOAD_ACCOUNT_READ_FAILED", uuid, playerName,
+                                    details = arrayOf("provider" to econ.name, "operationId" to economyOperationId))
                             }
                         } else {
-                            EconomyAudit.severe(plugin, "ECONOMY_LOAD_ACCOUNT_READ_FAILED", uuid, playerName,
-                                details = arrayOf("provider" to econ.name, "operationId" to economyOperationId))
+                            EconomyAudit.severe(plugin, "ECONOMY_LOAD_PROVIDER_MISSING", uuid, playerName,
+                                details = arrayOf("operationId" to economyOperationId))
                         }
-                    } else {
-                        EconomyAudit.severe(plugin, "ECONOMY_LOAD_PROVIDER_MISSING", uuid, playerName,
-                            details = arrayOf("operationId" to economyOperationId))
+                    } catch (e: Exception) {
+                        EconomyAudit.severe(plugin, "ECONOMY_LOAD_EXCEPTION", uuid, playerName, e,
+                            "operationId" to economyOperationId)
                     }
                 }
 
                 // CraftGUI
                 if (plugin.config.getBoolean("general.enableModules.shareCraftGui", false)) {
-                    val craftGuiData = plugin.databaseManager.craftGuiHandler.getData(uuid, playerName)
-                    if (craftGuiData != null) {
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            val pref = getCraftGuiPreference(uuid) ?: return@Runnable
-                            setBooleanPreference(pref, "setSoundEnabled", craftGuiData.soundEnabled)
-                            setBooleanPreference(pref, "setShowResultItems", craftGuiData.showResultItems)
-                            setBooleanPreference(pref, "setCraftableOnly", craftGuiData.craftableOnly)
-                            setBooleanPreference(pref, "setStashEnabled", craftGuiData.stashEnabled)
-                        })
+                    try {
+                        val craftGuiData = plugin.databaseManager.craftGuiHandler.getData(uuid, playerName)
+                        if (craftGuiData != null) {
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                val pref = getCraftGuiPreference(uuid) ?: return@Runnable
+                                setBooleanPreference(pref, "setSoundEnabled", craftGuiData.soundEnabled)
+                                setBooleanPreference(pref, "setShowResultItems", craftGuiData.showResultItems)
+                                setBooleanPreference(pref, "setCraftableOnly", craftGuiData.craftableOnly)
+                                setBooleanPreference(pref, "setStashEnabled", craftGuiData.stashEnabled)
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load CraftGUI for $playerName: ${e.message}")
                     }
                 }
                 
@@ -753,6 +803,12 @@ class SyncManager(private val plugin: AziSync) {
         economyReadyPlayers.remove(uuid)
         preloadedAdvancements.remove(uuid)
         advancementPreloadHandled.remove(uuid)
+    }
+
+    fun isEconomyReady(uuid: UUID): Boolean = economyReadyPlayers.contains(uuid)
+
+    fun markEconomyReady(uuid: UUID) {
+        economyReadyPlayers.add(uuid)
     }
 
     fun setSyncStatus(uuid: UUID, playerName: String, isComplete: Boolean) {

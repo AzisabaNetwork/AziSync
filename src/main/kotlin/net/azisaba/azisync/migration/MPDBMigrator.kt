@@ -27,6 +27,18 @@ class MPDBMigrator(private val plugin: AziSync) {
         }
     }
 
+    companion object {
+        fun normalizeUuid(raw: String?): String? {
+            if (raw == null) return null
+            val clean = raw.trim().lowercase()
+            return if (clean.length == 32 && !clean.contains("-")) {
+                "${clean.substring(0, 8)}-${clean.substring(8, 12)}-${clean.substring(12, 16)}-${clean.substring(16, 20)}-${clean.substring(20, 32)}"
+            } else {
+                clean
+            }
+        }
+    }
+
     private data class TableModule(
         val id: String,
         val displayName: String,
@@ -39,7 +51,7 @@ class MPDBMigrator(private val plugin: AziSync) {
         val migrateData: (sourceConn: Connection, targetConn: Connection, sourceTable: String, targetTable: String, onProgress: (processed: Int, total: Int) -> Unit) -> Int
     )
 
-    private data class SourceConnectionInfo(
+    data class SourceConnectionInfo(
         val useMainDatabase: Boolean,
         val description: String,
         val host: String = "",
@@ -98,7 +110,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setString(3, convertItemFormat(rs.getString("inventory") ?: "", 36))
@@ -168,7 +181,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setString(3, convertItemFormat(rs.getString("enderchest") ?: "", 27))
@@ -241,7 +255,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setFloat(3, rs.getFloat("exp"))
@@ -311,7 +326,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setString(3, rs.getString("potion_effects") ?: "")
@@ -390,7 +406,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setDouble(3, rs.getDouble("health"))
@@ -476,7 +493,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setString(3, rs.getString("world") ?: "world")
@@ -533,7 +551,14 @@ class MPDBMigrator(private val plugin: AziSync) {
             },
             migrateData = { sourceConn, targetConn, sourceTable, targetTable, onProgress ->
                 var processed = 0
-                val selectSql = "SELECT player_uuid, player_name, money, offline_money, sync_complete, last_seen FROM `$sourceTable`"
+                val hasOfflineMoney = runCatching {
+                    sourceConn.metaData.getColumns(null, null, sourceTable, "offline_money").use { it.next() }
+                }.getOrDefault(false)
+                val selectSql = if (hasOfflineMoney) {
+                    "SELECT player_uuid, player_name, money, offline_money, sync_complete, last_seen FROM `$sourceTable`"
+                } else {
+                    "SELECT player_uuid, player_name, money, sync_complete, last_seen FROM `$sourceTable`"
+                }
                 val insertSql = """
                     INSERT INTO `$targetTable` (`player_uuid`, `player_name`, `money`, `offline_money`, `sync_complete`, `last_seen`)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -551,11 +576,12 @@ class MPDBMigrator(private val plugin: AziSync) {
                         selectStmt.executeQuery().use { rs ->
                             targetConn.prepareStatement(insertSql).use { insertStmt ->
                                 while (rs.next()) {
-                                    val uuid = rs.getString("player_uuid") ?: continue
+                                    val rawUuid = rs.getString("player_uuid") ?: continue
+                                    val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setDouble(3, rs.getDouble("money"))
-                                    insertStmt.setDouble(4, rs.getDouble("offline_money"))
+                                    insertStmt.setDouble(4, if (hasOfflineMoney) rs.getDouble("offline_money") else 0.0)
                                     insertStmt.setString(5, rs.getString("sync_complete") ?: "true")
                                     insertStmt.setString(6, rs.getString("last_seen") ?: System.currentTimeMillis().toString())
                                     insertStmt.addBatch()
@@ -569,6 +595,13 @@ class MPDBMigrator(private val plugin: AziSync) {
                                 }
                                 insertStmt.executeBatch()
                                 targetConn.commit()
+                                // Clean up old unhyphenated 32-character records from targetTable
+                                try {
+                                    targetConn.createStatement().use { cleanStmt ->
+                                        cleanStmt.executeUpdate("DELETE FROM `$targetTable` WHERE LENGTH(`player_uuid`) = 32")
+                                    }
+                                    targetConn.commit()
+                                } catch (_: Exception) {}
                             }
                         }
                     }
@@ -581,7 +614,7 @@ class MPDBMigrator(private val plugin: AziSync) {
         )
     )
 
-    private fun resolveSourceInfo(): SourceConnectionInfo {
+    fun resolveSourceInfo(): SourceConnectionInfo {
         val config = plugin.config
         val mpdbConfigFile = File(plugin.dataFolder.parentFile, "MysqlPlayerDataBridge/config.yml")
         val mpdbYaml = if (mpdbConfigFile.exists()) {
@@ -684,7 +717,7 @@ class MPDBMigrator(private val plugin: AziSync) {
         return module.defaultMpdbTable
     }
 
-    private fun getSourceConnection(info: SourceConnectionInfo): Connection {
+    fun getSourceConnection(info: SourceConnectionInfo): Connection {
         if (info.useMainDatabase) {
             return plugin.databaseManager.getConnection()
         }
@@ -735,15 +768,26 @@ class MPDBMigrator(private val plugin: AziSync) {
         return 0
     }
 
-    fun scan(sender: CommandSender) {
+    fun scan(sender: CommandSender, targetModuleId: String? = null) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             val sourceInfo = resolveSourceInfo()
             plugin.messageManager.sendMessage(sender, "migrate_scanning", mapOf("{target}" to sourceInfo.description))
             try {
+                val targetModules = if (targetModuleId != null) {
+                    val matched = modules.filter { it.id.equals(targetModuleId, ignoreCase = true) }
+                    if (matched.isEmpty()) {
+                        sender.sendMessage("§cUnknown module: $targetModuleId. Available: ${modules.joinToString { it.id }}")
+                        return@Runnable
+                    }
+                    matched
+                } else {
+                    modules
+                }
+
                 getSourceConnection(sourceInfo).use { conn ->
                     plugin.messageManager.sendMessage(sender, "migrate_scan_header")
                     var foundCount = 0
-                    for (module in modules) {
+                    for (module in targetModules) {
                         val configuredName = getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)
                         val actualName = findActualTableName(conn, configuredName)
                         if (actualName != null) {
@@ -770,7 +814,11 @@ class MPDBMigrator(private val plugin: AziSync) {
                         }
                     }
                     if (foundCount > 0) {
-                        plugin.messageManager.sendMessage(sender, "migrate_confirm_prompt")
+                        if (targetModuleId != null) {
+                            sender.sendMessage("§e移行を開始するには §6/azisync migrate mpdb $targetModuleId confirm §eを実行してください。既存のデータは上書きされます。")
+                        } else {
+                            plugin.messageManager.sendMessage(sender, "migrate_confirm_prompt")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -785,7 +833,7 @@ class MPDBMigrator(private val plugin: AziSync) {
         })
     }
 
-    fun migrate(sender: CommandSender) {
+    fun migrate(sender: CommandSender, targetModuleId: String? = null) {
         if (!isMigrating.compareAndSet(false, true)) {
             plugin.messageManager.sendMessage(sender, "migrate_already_running")
             return
@@ -793,6 +841,18 @@ class MPDBMigrator(private val plugin: AziSync) {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             try {
+                val targetModules = if (targetModuleId != null) {
+                    val matched = modules.filter { it.id.equals(targetModuleId, ignoreCase = true) }
+                    if (matched.isEmpty()) {
+                        sender.sendMessage("§cUnknown module: $targetModuleId. Available: ${modules.joinToString { it.id }}")
+                        isMigrating.set(false)
+                        return@Runnable
+                    }
+                    matched
+                } else {
+                    modules
+                }
+
                 val sourceInfo = resolveSourceInfo()
                 plugin.messageManager.sendMessage(sender, "migrate_started")
                 plugin.logger.info("Starting MPDB data migration from ${sourceInfo.description}...")
@@ -805,7 +865,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                             targetConn.autoCommit = false
                             val charSet = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 
-                            for (module in modules) {
+                            for (module in targetModules) {
                                 val configuredName = getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)
                                 val actualSourceTable = findActualTableName(sourceConn, configuredName) ?: continue
                                 val targetTable = plugin.config.getString(module.targetConfigKey, module.defaultTargetTable) ?: module.defaultTargetTable
