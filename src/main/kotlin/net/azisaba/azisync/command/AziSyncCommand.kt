@@ -15,8 +15,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
             return true
         }
 
-        // 単体コマンド (/inv, /invsee) のハンドリング
-        if (command.name.lowercase() in listOf("inv", "invsee")) {
+        if (command.name.lowercase() in listOf("inv")) {
             if (sender !is Player) {
                 sender.sendMessage("This command can only be run by a player.")
                 return true
@@ -85,7 +84,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 }
                 plugin.offlineInventoryManager.openInventoryGui(sender, args[1])
             }
-            "ec", "ecsee" -> {
+            "ec" -> {
                 if (sender !is Player) {
                     sender.sendMessage("This command can only be run by a player.")
                     return true
@@ -139,13 +138,13 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
         }
 
         if (args.size == 1) {
-            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback", "migrate")
+            val subcommands = listOf("help", "reload", "saveall", "save", "load", "inv", "ec", "armor", "history", "rollback", "migrate")
             return subcommands.filter { it.startsWith(args[0].lowercase()) }.toMutableList()
         } else if (args.size == 2) {
             if (args[0].lowercase() == "migrate") {
                 return listOf("mpdb").filter { it.startsWith(args[1].lowercase()) }.toMutableList()
             }
-            if (args[0].lowercase() in listOf("save", "load", "inv", "invsee", "ec", "ecsee", "armor", "history", "rollback")) {
+            if (args[0].lowercase() in listOf("save", "load", "inv", "ec", "armor", "history", "rollback")) {
                 return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[1].lowercase()) }.toMutableList()
             }
         } else if (args.size == 3 && args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {

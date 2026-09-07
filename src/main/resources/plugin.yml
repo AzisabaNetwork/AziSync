@@ -18,7 +18,6 @@ commands:
     usage: /azisync
   inv:
     description: View and edit a player's inventory
-    aliases: [invsee]
     permission: azisync.admin
     usage: /inv <player>
 permissions:

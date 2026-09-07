@@ -1,6 +1,7 @@
 package net.azisaba.azisync.migration
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.configuration.file.YamlConfiguration
@@ -13,8 +14,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MPDBMigrator(private val plugin: AziSync) {
 
     private val isMigrating = AtomicBoolean(false)
-
     private val charSet = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+
+    private fun convertItemFormat(raw: String, defaultSize: Int): String {
+        if (raw.isBlank() || raw == "none") return "none"
+        return try {
+            val items = ItemSerializer.fromBase64(raw, defaultSize)
+            ItemSerializer.toBase64(items)
+        } catch (e: Exception) {
+            plugin.logger.warning("[AziSync] Failed to re-encode item data during migration, saving original: ${e.message}")
+            raw
+        }
+    }
 
     private data class TableModule(
         val id: String,
@@ -90,8 +101,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                                     val uuid = rs.getString("player_uuid") ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
-                                    insertStmt.setString(3, rs.getString("inventory") ?: "")
-                                    insertStmt.setString(4, rs.getString("armor") ?: "")
+                                    insertStmt.setString(3, convertItemFormat(rs.getString("inventory") ?: "", 36))
+                                    insertStmt.setString(4, convertItemFormat(rs.getString("armor") ?: "", 4))
                                     insertStmt.setInt(5, rs.getInt("hotbar_slot"))
                                     insertStmt.setInt(6, rs.getInt("gamemode"))
                                     insertStmt.setString(7, rs.getString("sync_complete") ?: "true")
@@ -160,7 +171,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                                     val uuid = rs.getString("player_uuid") ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
-                                    insertStmt.setString(3, rs.getString("enderchest") ?: "")
+                                    insertStmt.setString(3, convertItemFormat(rs.getString("enderchest") ?: "", 27))
                                     insertStmt.setString(4, rs.getString("sync_complete") ?: "true")
                                     insertStmt.setString(5, rs.getString("last_seen") ?: System.currentTimeMillis().toString())
                                     insertStmt.addBatch()
@@ -383,7 +394,8 @@ class MPDBMigrator(private val plugin: AziSync) {
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
                                     insertStmt.setDouble(3, rs.getDouble("health"))
-                                    insertStmt.setDouble(4, rs.getDouble("health_scale"))
+                                    val healthScale = rs.getDouble("health_scale")
+                                    insertStmt.setDouble(4, if (healthScale > 0.0) healthScale else 20.0)
                                     insertStmt.setDouble(5, rs.getDouble("max_health"))
                                     insertStmt.setInt(6, rs.getInt("food"))
                                     insertStmt.setString(7, rs.getString("saturation") ?: "5.0")
@@ -791,6 +803,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                     plugin.databaseManager.getConnection().use { targetConn ->
                         try {
                             targetConn.autoCommit = false
+                            val charSet = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 
                             for (module in modules) {
                                 val configuredName = getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)

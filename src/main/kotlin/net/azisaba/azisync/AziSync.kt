@@ -12,6 +12,7 @@ import net.azisaba.azisync.listener.PlayerProtectListener
 import net.azisaba.azisync.listener.PlayerQuitListener
 import net.azisaba.azisync.sync.SyncManager
 import net.azisaba.azisync.task.DataSaveTask
+import net.azisaba.azisync.util.ItemSerializer
 import net.azisaba.azisync.util.MessageManager
 import org.bukkit.entity.Player
 import org.bukkit.event.HandlerList
@@ -68,6 +69,7 @@ class AziSync : JavaPlugin() {
 
         syncManager = SyncManager(this)
         messageManager = MessageManager(this)
+        ItemSerializer.legacyDataVersion = config.getInt("migration.mpdb.sourceDataVersion", 2230)
         server.pluginManager.registerEvents(PlayerJoinListener(this), this)
         server.pluginManager.registerEvents(AdvancementPreloadListener(this), this)
         server.pluginManager.registerEvents(PlayerQuitListener(this), this)

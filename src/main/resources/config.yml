@@ -105,6 +105,10 @@ migration:
     # Set to true to use AziSync's database connection (same host/user/password/database)
     # Ignored if autoDetectFromPlugin is true and MysqlPlayerDataBridge config is found.
     useMainDatabase: false
+    # MPDB が稼働していた元サーバーの Minecraft DataVersion
+    # 1.15.2: 2230, 1.16.5: 2586, 1.12.2: 1343, 1.20.4: 3700
+    # 1.20.5+ でアイテム名・Lore・属性・コンポーネントを完全に自動復元・移行するために使用されます
+    sourceDataVersion: 2230
     # Manual connection settings when auto-detection is disabled or MPDB is on another server
     host: 192.168.100.101
     port: 3306

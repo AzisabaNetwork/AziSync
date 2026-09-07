@@ -10,6 +10,7 @@ import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Location
+import org.bukkit.Material
 import org.bukkit.attribute.Attribute
 import org.bukkit.entity.Player
 import java.util.UUID
@@ -488,44 +489,54 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Inventory
                 if (loadInventory || loadArmor || loadGameMode) {
-                    val invData = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
-                    if (invData != null) {
-                        val contents = if (loadInventory && invData.inventory != "none") ItemSerializer.fromBase64(invData.inventory) else null
-                        val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor) else null
-                        
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            if (!player.isOnline) return@Runnable
-                            if (contents != null) {
-                                if (contents.size >= 41) {
-                                    val storage = contents.copyOfRange(0, 36)
-                                    val armorFromContents = contents.copyOfRange(36, 40)
-                                    val offhandFromContents = contents[40]
-                                    player.inventory.storageContents = storage
-                                    if (loadArmor) player.inventory.setArmorContents(armorFromContents)
-                                    if (offhandFromContents != null) player.inventory.setItemInOffHand(offhandFromContents)
-                                } else {
-                                    player.inventory.storageContents = contents
+                    try {
+                        val invData = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
+                        if (invData != null) {
+                            val contents = if (loadInventory && invData.inventory != "none") ItemSerializer.fromBase64(invData.inventory, 36) else null
+                            val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor, 4) else null
+                            
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                if (!player.isOnline) return@Runnable
+                                if (contents != null) {
+                                    if (contents.size >= 41) {
+                                        val storage = contents.copyOfRange(0, 36)
+                                        val armorFromContents = contents.copyOfRange(36, 40)
+                                        val offhandFromContents = contents[40]
+                                        player.inventory.storageContents = storage
+                                        if (loadArmor) player.inventory.setArmorContents(armorFromContents)
+                                        if (offhandFromContents != null) player.inventory.setItemInOffHand(offhandFromContents)
+                                    } else {
+                                        player.inventory.storageContents = contents
+                                    }
+                                    player.inventory.heldItemSlot = invData.hotbarSlot
                                 }
-                                player.inventory.heldItemSlot = invData.hotbarSlot
-                            }
-                            if (loadArmor && armor != null) player.inventory.setArmorContents(armor)
-                            if (loadGameMode) {
-                                val gm = GameMode.getByValue(invData.gamemode)
-                                if (gm != null) player.gameMode = gm
-                            }
-                            player.updateInventory()
-                        })
+                                if (loadArmor && armor != null && armor.any { it != null && it.type != Material.AIR }) {
+                                    player.inventory.setArmorContents(armor)
+                                }
+                                if (loadGameMode) {
+                                    val gm = GameMode.getByValue(invData.gamemode)
+                                    if (gm != null) player.gameMode = gm
+                                }
+                                player.updateInventory()
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load inventory/armor for $playerName: ${e.message}")
                     }
                 }
 
                 // EnderChest
                 if (plugin.config.getBoolean("general.enableModules.shareEnderChest", true)) {
-                    val ecData = plugin.databaseManager.enderchestHandler.getData(uuid, playerName)
-                    if (ecData != null && ecData.enderchest != "none") {
-                        val contents = ItemSerializer.fromBase64(ecData.enderchest)
-                        Bukkit.getScheduler().runTask(plugin, Runnable {
-                            player.enderChest.contents = contents
-                        })
+                    try {
+                        val ecData = plugin.databaseManager.enderchestHandler.getData(uuid, playerName)
+                        if (ecData != null && ecData.enderchest != "none") {
+                            val contents = ItemSerializer.fromBase64(ecData.enderchest, 27)
+                            Bukkit.getScheduler().runTask(plugin, Runnable {
+                                player.enderChest.contents = contents
+                            })
+                        }
+                    } catch (e: Exception) {
+                        plugin.logger.severe("Failed to load enderchest for $playerName: ${e.message}")
                     }
                 }
 
@@ -546,20 +557,37 @@ class SyncManager(private val plugin: AziSync) {
                     val healthData = plugin.databaseManager.healthHandler.getData(uuid, playerName)
                     if (healthData != null) {
                         Bukkit.getScheduler().runTask(plugin, Runnable {
-                            if (loadHealth) {
-                                val maxHealth = player.getAttribute(maxHealthAttribute)
-                                maxHealth?.baseValue = healthData.maxHealth
-                                player.healthScale = healthData.healthScale
-                                val effectiveMaxHealth = maxHealth?.value ?: healthData.maxHealth
-                                player.health = healthData.health.coerceIn(0.0, effectiveMaxHealth)
-                            }
-                            if (loadFood) {
-                                player.foodLevel = healthData.food
-                                player.saturation = healthData.saturation.toFloatOrNull() ?: 5.0f
-                            }
-                            if (loadAir) {
-                                player.maximumAir = healthData.maxAir
-                                player.remainingAir = healthData.air
+                            if (!player.isOnline) return@Runnable
+                            try {
+                                if (loadHealth) {
+                                    val maxHealth = player.getAttribute(maxHealthAttribute)
+                                    if (healthData.maxHealth > 0.0) {
+                                        maxHealth?.baseValue = healthData.maxHealth
+                                    }
+                                    if (healthData.healthScale > 0.0) {
+                                        try {
+                                            player.isHealthScaled = true
+                                            player.healthScale = healthData.healthScale
+                                        } catch (_: Exception) {}
+                                    } else {
+                                        player.isHealthScaled = false
+                                    }
+                                    val effectiveMaxHealth = maxHealth?.value ?: (if (healthData.maxHealth > 0.0) healthData.maxHealth else 20.0)
+                                    val targetHealth = healthData.health.coerceIn(0.1, effectiveMaxHealth)
+                                    try {
+                                        player.health = targetHealth
+                                    } catch (_: Exception) {}
+                                }
+                                if (loadFood) {
+                                    player.foodLevel = healthData.food.coerceIn(0, 20)
+                                    player.saturation = (healthData.saturation.toFloatOrNull() ?: 5.0f).coerceIn(0.0f, 20.0f)
+                                }
+                                if (loadAir) {
+                                    player.maximumAir = if (healthData.maxAir > 0) healthData.maxAir else 300
+                                    player.remainingAir = healthData.air.coerceIn(0, player.maximumAir)
+                                }
+                            } catch (e: Exception) {
+                                plugin.logger.warning("Failed to apply health/food/air for ${player.name}: ${e.message}")
                             }
                         })
                     }

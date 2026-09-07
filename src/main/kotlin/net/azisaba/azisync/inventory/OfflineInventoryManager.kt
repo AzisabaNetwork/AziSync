@@ -119,7 +119,7 @@ class OfflineInventoryManager(private val plugin: AziSync) {
 
                 try {
                     val data = plugin.databaseManager.inventoryHandler.getData(uuid, resolvedName)
-                    val rawInv = decodeOrNull(data?.inventory)
+                    val rawInv = decodeOrNull(data?.inventory, 36)
                     val storage = arrayOfNulls<ItemStack>(36)
                     val armorFromInv = arrayOfNulls<ItemStack>(4)
                     var offHand: ItemStack? = null
@@ -138,7 +138,7 @@ class OfflineInventoryManager(private val plugin: AziSync) {
                         }
                     }
 
-                    val rawArmor = decodeOrNull(data?.armor)
+                    val rawArmor = decodeOrNull(data?.armor, 4)
                     val armor = arrayOfNulls<ItemStack>(4)
                     for (i in 0 until 4) {
                         armor[i] = rawArmor?.getOrNull(i) ?: armorFromInv.getOrNull(i)
@@ -338,10 +338,10 @@ class OfflineInventoryManager(private val plugin: AziSync) {
     /**
      * Base64文字列をデコードする。失敗または空の場合は null。
      */
-    fun decodeOrNull(base64: String?): Array<ItemStack?>? {
+    fun decodeOrNull(base64: String?, defaultSize: Int = 36): Array<ItemStack?>? {
         if (base64.isNullOrBlank() || base64 == "none") return null
         return try {
-            ItemSerializer.fromBase64(base64)
+            ItemSerializer.fromBase64(base64, defaultSize)
         } catch (e: Exception) {
             null
         }
@@ -352,7 +352,7 @@ class OfflineInventoryManager(private val plugin: AziSync) {
      * データが "none" または null の場合は空配列を返す。
      */
     private fun decodeOrEmpty(base64: String?, expectedSize: Int): Array<ItemStack?> {
-        val decoded = decodeOrNull(base64) ?: return arrayOfNulls(expectedSize)
+        val decoded = decodeOrNull(base64, expectedSize) ?: return arrayOfNulls(expectedSize)
         val padded = arrayOfNulls<ItemStack>(expectedSize)
         for (i in 0 until minOf(decoded.size, expectedSize)) padded[i] = decoded[i]
         return padded
