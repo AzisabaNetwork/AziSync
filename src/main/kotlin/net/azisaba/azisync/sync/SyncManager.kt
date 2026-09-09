@@ -13,6 +13,7 @@ import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.attribute.Attribute
 import org.bukkit.entity.Player
+import org.bukkit.inventory.ItemStack
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
@@ -507,9 +508,10 @@ class SyncManager(private val plugin: AziSync) {
                                         val offhandFromContents = contents[40]
                                         player.inventory.storageContents = storage
                                         if (loadArmor) player.inventory.setArmorContents(armorFromContents)
-                                        if (offhandFromContents != null) player.inventory.setItemInOffHand(offhandFromContents)
+                                        player.inventory.setItemInOffHand(offhandFromContents ?: ItemStack(Material.AIR))
                                     } else {
                                         player.inventory.storageContents = contents
+                                        player.inventory.setItemInOffHand(ItemStack(Material.AIR))
                                     }
                                     player.inventory.heldItemSlot = invData.hotbarSlot
                                 }
