@@ -493,6 +493,7 @@ object ItemSerializer {
             is Map<*, *> -> {
                 @Suppress("UNCHECKED_CAST")
                 val map = node as MutableMap<String, Any?>
+                truncateLegacyBookTitle(map)
                 for (key in map.keys.toList()) {
                     val value = map[key]
                     if (key in TEXT_COMPONENT_KEYS) {
@@ -519,6 +520,22 @@ object ItemSerializer {
             }
             is List<*> -> for (value in node) sanitizeLegacyTextComponents(value, depth + 1)
         }
+    }
+
+    private const val MAX_BOOK_TITLE_LENGTH = 32
+
+    /**
+     * Modern `minecraft:written_book_content` only accepts titles of up to 32 characters, but 1.15.2 kept
+     * whatever was in NBT (e.g. "If you can see this, it didn't work" books made with hacked clients),
+     * so DataConverter rejected the whole item. Over-long titles are cut to 32 characters.
+     */
+    private fun truncateLegacyBookTitle(map: MutableMap<String, Any?>) {
+        val title = map["title"] as? String ?: return
+        if (title.length <= MAX_BOOK_TITLE_LENGTH) return
+        if (!map.containsKey("author") && !map.containsKey("pages") && !map.containsKey("resolved")) return
+        var end = MAX_BOOK_TITLE_LENGTH
+        if (Character.isHighSurrogate(title[end - 1])) end--
+        map["title"] = title.substring(0, end)
     }
 
     /** Returns the repaired JSON, or null when the string is not JSON or needed no change. */
