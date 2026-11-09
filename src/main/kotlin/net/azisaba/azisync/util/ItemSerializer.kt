@@ -147,7 +147,13 @@ object ItemSerializer {
         return fromBase64(data, 36)
     }
 
-    fun fromBase64(data: String, defaultSize: Int): Array<ItemStack?> {
+    /**
+     * @param strict when true, any item that cannot be restored exactly (unknown material,
+     * unparseable NBT, unmappable slot, unexpected object) aborts the whole decode instead of
+     * being silently dropped. Use this for data that will later be saved back, so a partial
+     * decode can never overwrite the stored copy and lose items.
+     */
+    fun fromBase64(data: String, defaultSize: Int, strict: Boolean = false): Array<ItemStack?> {
         if (data.isBlank() || data == "none") {
             return arrayOfNulls(defaultSize)
         }
@@ -172,13 +178,7 @@ object ItemSerializer {
                 val inputStream = ByteArrayInputStream(bytes)
                 val dataInput = BukkitObjectInputStream(inputStream)
 
-                val size = dataInput.readInt()
-                val items = arrayOfNulls<ItemStack>(size)
-
-                for (i in 0 until size) {
-                    items[i] = dataInput.readObject() as? ItemStack
-                }
-
+                val items = readBukkitItems(dataInput, strict)
                 dataInput.close()
                 return items
             } catch (e: Exception) {
@@ -193,7 +193,7 @@ object ItemSerializer {
         ) {
             try {
                 val rawPayload = readNbt(bytes)
-                return fromNbtList(rawPayload, defaultSize)
+                return fromNbtList(rawPayload, defaultSize, strict)
             } catch (e: Exception) {
                 Bukkit.getLogger().log(Level.SEVERE, "[AziSync] Error deserializing NBT item list: ${e.message}", e)
                 throw IllegalStateException("Unable to decode NBT item data.", e)
@@ -204,24 +204,55 @@ object ItemSerializer {
         try {
             val inputStream = ByteArrayInputStream(bytes)
             val dataInput = BukkitObjectInputStream(inputStream)
-            val size = dataInput.readInt()
-            val items = arrayOfNulls<ItemStack>(size)
-            for (i in 0 until size) {
-                items[i] = dataInput.readObject() as? ItemStack
-            }
+            val items = readBukkitItems(dataInput, strict)
             dataInput.close()
             return items
         } catch (_: Throwable) {
             try {
                 val rawPayload = readNbt(bytes)
-                return fromNbtList(rawPayload, defaultSize)
+                return fromNbtList(rawPayload, defaultSize, strict)
             } catch (e: Throwable) {
                 throw IllegalStateException("Unable to decode class type (neither BukkitObjectInputStream nor NBT).", e)
             }
         }
     }
 
-    private fun fromNbtList(rawPayload: Any?, defaultSize: Int): Array<ItemStack?> {
+    private fun readBukkitItems(dataInput: BukkitObjectInputStream, strict: Boolean): Array<ItemStack?> {
+        val size = dataInput.readInt()
+        val items = arrayOfNulls<ItemStack>(size)
+        for (i in 0 until size) {
+            val obj = dataInput.readObject()
+            if (strict && obj != null && obj !is ItemStack) {
+                throw IllegalStateException("Unexpected object ${obj.javaClass.name} at slot $i")
+            }
+            items[i] = obj as? ItemStack
+        }
+        return items
+    }
+
+    private fun isAirId(id: String?): Boolean {
+        if (id.isNullOrEmpty()) return true
+        val clean = id.removePrefix("minecraft:").lowercase()
+        return clean == "air" || clean.endsWith("_air")
+    }
+
+    /** Parses one item; in strict mode a non-air entry that cannot be restored throws. */
+    private fun parseItemChecked(compound: Map<String, Any?>, slotLabel: Any?, strict: Boolean): ItemStack? {
+        val id = compound["id"]?.toString()
+        val item = try {
+            parseItem(compound)
+        } catch (e: Throwable) {
+            if (strict) throw IllegalStateException("Failed to deserialize item '$id' at slot $slotLabel", e)
+            Bukkit.getLogger().log(Level.WARNING, "[AziSync] Failed to deserialize item at slot $slotLabel: ${e.message}")
+            return null
+        }
+        if (strict && !isAirId(id) && (item == null || isAir(item.type))) {
+            throw IllegalStateException("Item '$id' at slot $slotLabel could not be restored")
+        }
+        return item?.takeUnless { isAir(it.type) }
+    }
+
+    private fun fromNbtList(rawPayload: Any?, defaultSize: Int, strict: Boolean = false): Array<ItemStack?> {
         @Suppress("UNCHECKED_CAST")
         val list: List<Map<String, Any?>> = when (rawPayload) {
             is List<*> -> rawPayload.filterIsInstance<Map<String, Any?>>()
@@ -229,7 +260,12 @@ object ItemSerializer {
                 val innerList = (rawPayload["Inventory"] ?: rawPayload["items"] ?: rawPayload["inventory"] ?: rawPayload["Items"]) as? List<*>
                 innerList?.filterIsInstance<Map<String, Any?>>() ?: listOf(rawPayload as Map<String, Any?>)
             }
-            else -> return arrayOfNulls(defaultSize)
+            else -> {
+                if (strict && rawPayload != null) {
+                    throw IllegalStateException("Unexpected NBT payload type ${rawPayload.javaClass.name}")
+                }
+                return arrayOfNulls(defaultSize)
+            }
         }
 
         if (list.isEmpty()) {
@@ -241,7 +277,7 @@ object ItemSerializer {
             val size = maxOf(defaultSize, list.size)
             val items = arrayOfNulls<ItemStack>(size)
             for (i in list.indices) {
-                items[i] = parseItem(list[i])
+                items[i] = if (strict) parseItemChecked(list[i], i, true) else parseItem(list[i])
             }
             return items
         }
@@ -261,7 +297,13 @@ object ItemSerializer {
         val result = arrayOfNulls<ItemStack>(targetSize)
 
         for (compound in list) {
-            val rawSlot = (compound["Slot"] as? Number)?.toInt() ?: continue
+            val rawSlot = (compound["Slot"] as? Number)?.toInt()
+            if (rawSlot == null) {
+                if (strict && !isAirId(compound["id"]?.toString())) {
+                    throw IllegalStateException("Item '${compound["id"]}' has no usable slot")
+                }
+                continue
+            }
             val targetSlot = when (targetSize) {
                 4 -> if (rawSlot in 100..103) rawSlot - 100 else rawSlot
                 27 -> rawSlot
@@ -279,14 +321,12 @@ object ItemSerializer {
             }
 
             if (targetSlot in 0 until targetSize) {
-                try {
-                    val item = parseItem(compound)
-                    if (item != null && !isAir(item.type)) {
-                        result[targetSlot] = item
-                    }
-                } catch (e: Throwable) {
-                    Bukkit.getLogger().log(Level.WARNING, "[AziSync] Failed to deserialize item at slot $rawSlot: ${e.message}")
+                val item = parseItemChecked(compound, rawSlot, strict)
+                if (item != null) {
+                    result[targetSlot] = item
                 }
+            } else if (strict && !isAirId(compound["id"]?.toString())) {
+                throw IllegalStateException("Item '${compound["id"]}' has unmappable slot $rawSlot")
             }
         }
 

@@ -8,6 +8,11 @@ import java.sql.Connection
 import java.sql.SQLException
 
 class DatabaseManager(private val plugin: AziSync) {
+    companion object {
+        /** Current time in epoch millis taken from the database server, so all servers share one clock. */
+        const val DB_NOW_MILLIS = "CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS SIGNED)"
+    }
+
     private var dataSource: HikariDataSource? = null
     var redisManager: RedisManager? = null
 
@@ -16,7 +21,8 @@ class DatabaseManager(private val plugin: AziSync) {
         HYBRID
     }
 
-    data class SyncState(val status: String, val version: Long)
+    /** ageMillis is measured with the database clock, so it is comparable across servers. */
+    data class SyncState(val status: String, val version: Long, val ageMillis: Long)
 
     class SyncLock internal constructor(
         private val connection: Connection,
@@ -143,13 +149,12 @@ class DatabaseManager(private val plugin: AziSync) {
                 }
                 val version = currentVersion + 1
                 connection.prepareStatement(
-                    "INSERT INTO `$tableName` (`player_uuid`, `player_name`, `status`, `version`, `updated_at`) VALUES (?, ?, 'saving', ?, ?) " +
+                    "INSERT INTO `$tableName` (`player_uuid`, `player_name`, `status`, `version`, `updated_at`) VALUES (?, ?, 'saving', ?, $DB_NOW_MILLIS) " +
                         "ON DUPLICATE KEY UPDATE `player_name` = VALUES(`player_name`), `status` = 'saving', `version` = VALUES(`version`), `updated_at` = VALUES(`updated_at`)"
                 ).use { statement ->
                     statement.setString(1, uuid.toString())
                     statement.setString(2, playerName)
                     statement.setLong(3, version)
-                    statement.setLong(4, System.currentTimeMillis())
                     statement.executeUpdate()
                 }
                 connection.commit()
@@ -165,11 +170,10 @@ class DatabaseManager(private val plugin: AziSync) {
         val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
         getConnection().use { connection ->
             connection.prepareStatement(
-                "UPDATE `$tableName` SET `status` = 'complete', `updated_at` = ? WHERE `player_uuid` = ? AND `version` = ?"
+                "UPDATE `$tableName` SET `status` = 'complete', `updated_at` = $DB_NOW_MILLIS WHERE `player_uuid` = ? AND `version` = ?"
             ).use { statement ->
-                statement.setLong(1, System.currentTimeMillis())
-                statement.setString(2, uuid.toString())
-                statement.setLong(3, version)
+                statement.setString(1, uuid.toString())
+                statement.setLong(2, version)
                 return statement.executeUpdate() == 1
             }
         }
@@ -179,11 +183,10 @@ class DatabaseManager(private val plugin: AziSync) {
         val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
         getConnection().use { connection ->
             connection.prepareStatement(
-                "UPDATE `$tableName` SET `status` = 'failed', `updated_at` = ? WHERE `player_uuid` = ? AND `version` = ?"
+                "UPDATE `$tableName` SET `status` = 'failed', `updated_at` = $DB_NOW_MILLIS WHERE `player_uuid` = ? AND `version` = ?"
             ).use { statement ->
-                statement.setLong(1, System.currentTimeMillis())
-                statement.setString(2, uuid.toString())
-                statement.setLong(3, version)
+                statement.setString(1, uuid.toString())
+                statement.setLong(2, version)
                 return statement.executeUpdate() == 1
             }
         }
@@ -192,14 +195,62 @@ class DatabaseManager(private val plugin: AziSync) {
     fun getSyncState(uuid: java.util.UUID): SyncState? {
         val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
         getConnection().use { connection ->
-            connection.prepareStatement("SELECT `status`, `version` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1").use { statement ->
+            connection.prepareStatement(
+                "SELECT `status`, `version`, ($DB_NOW_MILLIS - `updated_at`) AS `age_millis` FROM `$tableName` WHERE `player_uuid` = ? LIMIT 1"
+            ).use { statement ->
                 statement.setString(1, uuid.toString())
                 statement.executeQuery().use { resultSet ->
-                    if (resultSet.next()) return SyncState(resultSet.getString("status"), resultSet.getLong("version"))
+                    if (resultSet.next()) {
+                        return SyncState(
+                            resultSet.getString("status"),
+                            resultSet.getLong("version"),
+                            resultSet.getLong("age_millis").coerceAtLeast(0L)
+                        )
+                    }
                 }
             }
         }
         return null
+    }
+
+    /**
+     * Marks the player as actively playing on this server after a successful load.
+     * The destination of the next server switch waits until the owner leaves the
+     * 'active' state (via saving -> complete) or the heartbeat goes stale.
+     * A row that is currently 'saving' is left untouched.
+     */
+    fun markSyncActive(uuid: java.util.UUID, playerName: String) {
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            // updated_at must be assigned before status: MySQL evaluates SET clauses left to right.
+            connection.prepareStatement(
+                "INSERT INTO `$tableName` (`player_uuid`, `player_name`, `status`, `version`, `updated_at`) VALUES (?, ?, 'active', 0, $DB_NOW_MILLIS) " +
+                    "ON DUPLICATE KEY UPDATE `player_name` = VALUES(`player_name`), " +
+                    "`updated_at` = IF(`status` = 'saving', `updated_at`, VALUES(`updated_at`)), " +
+                    "`status` = IF(`status` = 'saving', `status`, 'active')"
+            ).use { statement ->
+                statement.setString(1, uuid.toString())
+                statement.setString(2, playerName)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    /** Refreshes updated_at for 'active' rows of players loaded on this server. */
+    fun touchActiveSyncStates(uuids: Collection<java.util.UUID>) {
+        if (uuids.isEmpty()) return
+        val tableName = plugin.config.getString("database.TablesNames.syncStateTableName", "azisync_sync_state")!!
+        getConnection().use { connection ->
+            for (chunk in uuids.chunked(500)) {
+                val placeholders = chunk.joinToString(",") { "?" }
+                connection.prepareStatement(
+                    "UPDATE `$tableName` SET `updated_at` = $DB_NOW_MILLIS WHERE `status` = 'active' AND `player_uuid` IN ($placeholders)"
+                ).use { statement ->
+                    chunk.forEachIndexed { index, uuid -> statement.setString(index + 1, uuid.toString()) }
+                    statement.executeUpdate()
+                }
+            }
+        }
     }
 
     fun isCurrentSyncVersion(uuid: java.util.UUID, version: Long): Boolean {

@@ -1,6 +1,7 @@
 package net.azisaba.azisync.listener
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.sync.SyncManager
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
@@ -27,47 +28,26 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
         }.runTaskTimer(plugin, 0L, 20L)
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
-            var syncFailed = false
-            val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
-            val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
-            val handoffGraceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
-
-            // Give the source server's dedicated sync-state writer a short window
-            // to publish "saving" before accepting an older "complete" state.
-            if (handoffGraceMillis > 0) Thread.sleep(handoffGraceMillis)
-            val waitStarted = System.nanoTime()
-            
-            while (true) {
-                if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) {
-                    return@Runnable
-                }
-                when (val status = plugin.syncManager.getSyncStatus(uuid)) {
-                    null, "complete" -> break
-                    "failed" -> {
-                        syncFailed = true
-                        break
-                    }
-                    "saving" -> Unit
-                    else -> {
-                        plugin.logger.warning("Unknown sync state '$status' for player $playerName")
-                        syncFailed = true
-                        break
-                    }
-                }
-                if (java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted) >= timeoutMillis) {
-                    syncFailed = true
-                    break
-                }
-                Thread.sleep(pollMillis)
-            }
-            
-            if (syncFailed) {
-                plugin.logger.warning("Data sync failed or timed out for player $playerName")
-                if (plugin.config.getBoolean("general.kickOnFailedSync", false)) {
+            when (plugin.syncManager.awaitHandoff(uuid, playerName)) {
+                SyncManager.HandoffResult.READY -> Unit
+                SyncManager.HandoffResult.UNAVAILABLE -> return@Runnable
+                SyncManager.HandoffResult.TIMEOUT -> {
+                    // The previous server has not finished saving. Loading now would apply stale
+                    // data that a later save would write back over the newer copy, so never load.
+                    plugin.logger.warning("Data sync timed out for player $playerName; refusing to load stale data.")
                     Bukkit.getScheduler().runTask(plugin, Runnable {
                         Bukkit.getPlayer(uuid)?.kickPlayer("Data sync timeout. Please reconnect.")
                     })
                     return@Runnable
+                }
+                SyncManager.HandoffResult.FAILED -> {
+                    plugin.logger.warning("Data sync failed for player $playerName (previous server could not save).")
+                    if (plugin.config.getBoolean("general.kickOnFailedSync", false)) {
+                        Bukkit.getScheduler().runTask(plugin, Runnable {
+                            Bukkit.getPlayer(uuid)?.kickPlayer("Data sync failed. Please reconnect.")
+                        })
+                        return@Runnable
+                    }
                 }
             }
             

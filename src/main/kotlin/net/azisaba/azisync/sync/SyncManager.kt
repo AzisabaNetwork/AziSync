@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SyncManager(private val plugin: AziSync) {
     private val maxHealthAttribute: Attribute by lazy {
@@ -36,9 +38,21 @@ class SyncManager(private val plugin: AziSync) {
     private val databaseExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
         Thread(runnable, "AziSync-Database").apply { isDaemon = true }
     }
-    private val syncStateExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+    // Single thread: markActive / heartbeat / beginSync for one player are applied in submission order.
+    private val syncStateExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "AziSync-SyncState").apply { isDaemon = true }
     }
+
+    /** How long an 'active'/'saving' row may go without updates before its owner is considered dead. */
+    private val staleMillis: Long =
+        plugin.config.getLong("general.syncWait.staleMillis", 30000L).coerceAtLeast(3000L)
+
+    init {
+        val heartbeatMillis = staleMillis / 3
+        syncStateExecutor.scheduleAtFixedRate({ heartbeat() }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS)
+    }
+
+    enum class HandoffResult { READY, FAILED, TIMEOUT, UNAVAILABLE }
 
     fun isLoaded(player: Player): Boolean {
         return loadedPlayers[player.uniqueId] ?: false
@@ -48,6 +62,79 @@ class SyncManager(private val plugin: AziSync) {
         loadedPlayers[player.uniqueId] = true
         if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
             economyReadyPlayers.add(player.uniqueId)
+        }
+        markActive(player.uniqueId, player.name)
+    }
+
+    private fun markActive(uuid: UUID, playerName: String) {
+        try {
+            syncStateExecutor.execute {
+                if (!plugin.databaseManager.isAvailable()) return@execute
+                runCatching { plugin.databaseManager.markSyncActive(uuid, playerName) }.onFailure {
+                    plugin.logger.warning("Failed to mark $playerName as active in sync state: ${it.message}")
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // Shutting down.
+        }
+    }
+
+    private fun heartbeat() {
+        try {
+            if (!plugin.databaseManager.isAvailable()) return
+            val uuids = loadedPlayers.filterValues { it }.keys.toList()
+            plugin.databaseManager.touchActiveSyncStates(uuids)
+        } catch (e: Throwable) {
+            // Never let an exception cancel the periodic task.
+            plugin.logger.warning("Failed to refresh sync-state heartbeat: ${e.message}")
+        }
+    }
+
+    /**
+     * Blocks (call off the main thread) until the previous server has finished handing the
+     * player's data over. Returns READY only when it is safe to read the stored data.
+     */
+    fun awaitHandoff(uuid: UUID, playerName: String): HandoffResult {
+        val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
+        val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
+        val graceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
+        if (graceMillis > 0) Thread.sleep(graceMillis)
+        val waitStarted = System.nanoTime()
+
+        while (true) {
+            if (!plugin.isEnabled || !plugin.databaseManager.isAvailable()) return HandoffResult.UNAVAILABLE
+            val snapshot = try {
+                getSyncSnapshot(uuid)
+            } catch (e: Exception) {
+                // A read error is not proof that the handoff finished: keep polling until timeout.
+                plugin.logger.warning("Failed to read sync state for $playerName: ${e.message}")
+                null
+            }
+            val status = snapshot?.status
+            val ageMillis = snapshot?.ageMillis
+            when {
+                snapshot == null -> Unit
+                status == null || status == "complete" -> return HandoffResult.READY
+                status == "failed" -> return HandoffResult.FAILED
+                // Still playing on (or just leaving) another server. Wait for its quit save,
+                // unless the owner stopped sending heartbeats (crashed).
+                status == "active" -> if (ageMillis != null && ageMillis >= staleMillis) {
+                    plugin.logger.warning("Sync state for $playerName is 'active' but stale (${ageMillis}ms); assuming the previous server died.")
+                    return HandoffResult.READY
+                }
+                status == "saving" -> if (ageMillis != null && ageMillis >= staleMillis) {
+                    plugin.logger.warning("Sync state for $playerName is stuck in 'saving' (${ageMillis}ms); treating it as failed.")
+                    return HandoffResult.FAILED
+                }
+                else -> {
+                    plugin.logger.warning("Unknown sync state '$status' for player $playerName")
+                    return HandoffResult.FAILED
+                }
+            }
+            if (TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted) >= timeoutMillis) {
+                return HandoffResult.TIMEOUT
+            }
+            Thread.sleep(pollMillis)
         }
     }
 
@@ -67,6 +154,13 @@ class SyncManager(private val plugin: AziSync) {
             return
         }
         if (!allowDisabledPlugin && !plugin.isEnabled) return
+        if (!isLoaded(player)) {
+            // The stored data was never applied on this server (still waiting for the handoff,
+            // or the load failed). Saving now would overwrite the real data with this server's
+            // stale local inventory, so leave the database and the sync state untouched.
+            plugin.logger.warning("Skipping save for ${player.name}: data has not been loaded on this server.")
+            return
+        }
         if (!plugin.databaseManager.isAvailable()) {
             plugin.logger.warning("Skipping save for ${player.name}: database is not available.")
             return
@@ -374,33 +468,20 @@ class SyncManager(private val plugin: AziSync) {
         }
 
         try {
-            val graceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
-            val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
-            val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
-            if (graceMillis > 0) Thread.sleep(graceMillis)
-            val waitStarted = System.nanoTime()
-
-            while (true) {
-                when (val status = getSyncStatus(uuid)) {
-                    null, "complete" -> break
-                    "failed" -> {
-                        logAdvancement("PRELOAD_SKIPPED_FAILED_SYNC", uuid, playerName, warning = true)
-                        return
-                    }
-                    "saving" -> Unit
-                    else -> {
-                        logAdvancement("PRELOAD_SKIPPED_UNKNOWN_SYNC_STATE", uuid, playerName, warning = true,
-                            "status" to status)
-                        return
-                    }
-                }
-                val waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)
-                if (waitedMillis >= timeoutMillis) {
-                    logAdvancement("PRELOAD_SKIPPED_TIMEOUT", uuid, playerName, warning = true,
-                        "waitedMillis" to waitedMillis)
+            when (awaitHandoff(uuid, playerName)) {
+                HandoffResult.READY -> Unit
+                HandoffResult.FAILED -> {
+                    logAdvancement("PRELOAD_SKIPPED_FAILED_SYNC", uuid, playerName, warning = true)
                     return
                 }
-                Thread.sleep(pollMillis)
+                HandoffResult.TIMEOUT -> {
+                    logAdvancement("PRELOAD_SKIPPED_TIMEOUT", uuid, playerName, warning = true)
+                    return
+                }
+                HandoffResult.UNAVAILABLE -> {
+                    logAdvancement("PRELOAD_SKIPPED_DATABASE_UNAVAILABLE", uuid, playerName, warning = true)
+                    return
+                }
             }
 
             val data = plugin.databaseManager.advancementHandler.getData(uuid, playerName)
@@ -471,8 +552,15 @@ class SyncManager(private val plugin: AziSync) {
 
         val uuid = player.uniqueId
         val economyOperationId = UUID.randomUUID().toString().substring(0, 8)
+        // Block saves until this load has fully succeeded (also covers /azisync load on a loaded player).
+        loadedPlayers.remove(uuid)
         economyReadyPlayers.remove(uuid)
         val playerName = player.name
+        val loadFailed = AtomicBoolean(false)
+        fun failLoad(module: String, e: Throwable) {
+            loadFailed.set(true)
+            plugin.logger.log(java.util.logging.Level.SEVERE, "Failed to load $module for $playerName", e)
+        }
         val creativeInventoryDisabled = plugin.config.getBoolean("general.disableCreativeItemShare", false) && player.gameMode == GameMode.CREATIVE
         val loadInventory = plugin.config.getBoolean("general.enableModules.shareInventory", true) && !creativeInventoryDisabled
         val loadArmor = plugin.config.getBoolean("general.enableModules.shareArmor", false) && !creativeInventoryDisabled
@@ -496,37 +584,38 @@ class SyncManager(private val plugin: AziSync) {
                     try {
                         val invData = plugin.databaseManager.inventoryHandler.getData(uuid, playerName)
                         if (invData != null) {
-                            val contents = if (loadInventory && invData.inventory != "none") ItemSerializer.fromBase64(invData.inventory, 36) else null
-                            val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor, 4) else null
+                            val contents = if (loadInventory && invData.inventory != "none") ItemSerializer.fromBase64(invData.inventory, 36, strict = true) else null
+                            val armor = if (loadArmor && invData.armor != "none") ItemSerializer.fromBase64(invData.armor, 4, strict = true) else null
                             
                             Bukkit.getScheduler().runTask(plugin, Runnable {
-                                if (!player.isOnline) return@Runnable
-                                if (contents != null) {
-                                    if (contents.size >= 41) {
-                                        val storage = contents.copyOfRange(0, 36)
-                                        val armorFromContents = contents.copyOfRange(36, 40)
-                                        val offhandFromContents = contents[40]
-                                        player.inventory.storageContents = storage
-                                        if (loadArmor) player.inventory.setArmorContents(armorFromContents)
-                                        player.inventory.setItemInOffHand(offhandFromContents ?: ItemStack(Material.AIR))
-                                    } else {
-                                        player.inventory.storageContents = contents
-                                        player.inventory.setItemInOffHand(ItemStack(Material.AIR))
+                                if (!player.isOnline || loadFailed.get()) return@Runnable
+                                try {
+                                    if (contents != null) {
+                                        // storageContents only accepts up to 36 slots; older payloads may be
+                                        // 37-40 long, so always split instead of assigning the raw array.
+                                        player.inventory.storageContents = contents.copyOf(36)
+                                        if (loadArmor && contents.size >= 40) {
+                                            player.inventory.setArmorContents(contents.copyOfRange(36, 40))
+                                        }
+                                        val offhand = if (contents.size >= 41) contents[40] else null
+                                        player.inventory.setItemInOffHand(offhand ?: ItemStack(Material.AIR))
+                                        player.inventory.heldItemSlot = invData.hotbarSlot.coerceIn(0, 8)
                                     }
-                                    player.inventory.heldItemSlot = invData.hotbarSlot
+                                    if (loadArmor && armor != null && armor.any { it != null && it.type != Material.AIR }) {
+                                        player.inventory.setArmorContents(armor)
+                                    }
+                                    if (loadGameMode) {
+                                        val gm = GameMode.getByValue(invData.gamemode)
+                                        if (gm != null) player.gameMode = gm
+                                    }
+                                    player.updateInventory()
+                                } catch (e: Exception) {
+                                    failLoad("inventory (apply)", e)
                                 }
-                                if (loadArmor && armor != null && armor.any { it != null && it.type != Material.AIR }) {
-                                    player.inventory.setArmorContents(armor)
-                                }
-                                if (loadGameMode) {
-                                    val gm = GameMode.getByValue(invData.gamemode)
-                                    if (gm != null) player.gameMode = gm
-                                }
-                                player.updateInventory()
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load inventory/armor for $playerName: ${e.message}")
+                        failLoad("inventory/armor", e)
                     }
                 }
 
@@ -535,13 +624,18 @@ class SyncManager(private val plugin: AziSync) {
                     try {
                         val ecData = plugin.databaseManager.enderchestHandler.getData(uuid, playerName)
                         if (ecData != null && ecData.enderchest != "none") {
-                            val contents = ItemSerializer.fromBase64(ecData.enderchest, 27)
+                            val contents = ItemSerializer.fromBase64(ecData.enderchest, 27, strict = true)
                             Bukkit.getScheduler().runTask(plugin, Runnable {
-                                player.enderChest.contents = contents
+                                if (!player.isOnline || loadFailed.get()) return@Runnable
+                                try {
+                                    player.enderChest.contents = contents.copyOf(player.enderChest.size)
+                                } catch (e: Exception) {
+                                    failLoad("ender chest (apply)", e)
+                                }
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load enderchest for $playerName: ${e.message}")
+                        failLoad("ender chest", e)
                     }
                 }
 
@@ -557,7 +651,7 @@ class SyncManager(private val plugin: AziSync) {
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load experience for $playerName: ${e.message}")
+                        failLoad("experience", e)
                     }
                 }
 
@@ -602,7 +696,7 @@ class SyncManager(private val plugin: AziSync) {
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load health/food/air for $playerName: ${e.message}")
+                        failLoad("health/food/air", e)
                     }
                 }
 
@@ -618,7 +712,7 @@ class SyncManager(private val plugin: AziSync) {
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load potion effects for $playerName: ${e.message}")
+                        failLoad("potion effects", e)
                     }
                 }
 
@@ -657,7 +751,7 @@ class SyncManager(private val plugin: AziSync) {
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load location for $playerName: ${e.message}")
+                        failLoad("location", e)
                     }
                 }
 
@@ -776,21 +870,30 @@ class SyncManager(private val plugin: AziSync) {
                             })
                         }
                     } catch (e: Exception) {
-                        plugin.logger.severe("Failed to load CraftGUI for $playerName: ${e.message}")
+                        failLoad("CraftGUI", e)
                     }
                 }
                 
                 Bukkit.getScheduler().runTask(plugin, Runnable {
                     if (!player.isOnline) return@Runnable
+                    // Runs after every apply task above (same-tick tasks run in scheduling order).
+                    if (loadFailed.get()) {
+                        handleLoadFailure(player)
+                        return@Runnable
+                    }
                     if (!plugin.config.getBoolean("general.disableSounds", false)) {
                         player.playSound(player.location, org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f)
                     }
                     loadedPlayers[player.uniqueId] = true
+                    markActive(uuid, playerName)
                     plugin.messageManager.sendMessage(player, "sync_complete")
+                    plugin.logger.info("Successfully loaded data for $playerName")
                 })
-                plugin.logger.info("Successfully loaded data for ${player.name}")
             } catch (e: Exception) {
-                plugin.logger.severe("Failed to load data for ${player.name}: ${e.message}")
+                failLoad("data", e)
+                Bukkit.getScheduler().runTask(plugin, Runnable {
+                    if (player.isOnline) handleLoadFailure(player)
+                })
                 if (plugin.config.getBoolean("general.enableModules.shareEconomy", true)) {
                     EconomyAudit.severe(plugin, "ECONOMY_LOAD_PIPELINE_ABORTED", uuid, playerName, e,
                         "operationId" to economyOperationId)
@@ -800,6 +903,16 @@ class SyncManager(private val plugin: AziSync) {
         }
     }
     
+    /**
+     * The stored data could not be applied completely. The player stays "not loaded", so no
+     * save will ever overwrite the stored copy; disconnect them so they can retry cleanly.
+     */
+    private fun handleLoadFailure(player: Player) {
+        plugin.logger.severe("Load for ${player.name} (${player.uniqueId}) failed; saving is disabled for this session " +
+            "to protect the stored data. Kicking the player.")
+        player.kickPlayer("Failed to load your data safely. Please reconnect. If this keeps happening, contact staff.")
+    }
+
     fun removeLoadedStatus(uuid: UUID) {
         loadedPlayers.remove(uuid)
         economyReadyPlayers.remove(uuid)
@@ -849,15 +962,22 @@ class SyncManager(private val plugin: AziSync) {
         }
     }
 
-    fun getSyncStatus(uuid: UUID): String? {
+    /** status == null means the player has no sync-state row yet (first join). */
+    data class SyncSnapshot(val status: String?, val ageMillis: Long?)
+
+    fun getSyncSnapshot(uuid: UUID): SyncSnapshot {
+        val state = plugin.databaseManager.getSyncState(uuid)
+        val mysqlStatus = state?.status?.let(::normalizeSyncStatus)
         if (plugin.databaseManager.storageMode == DatabaseManager.StorageMode.HYBRID) {
             val redisStatus = plugin.databaseManager.redisManager?.getSyncStatus(uuid)?.let(::normalizeSyncStatus)
-            if (redisStatus == "saving" || redisStatus == "failed") return redisStatus
+            if (redisStatus == "saving" || redisStatus == "failed") return SyncSnapshot(redisStatus, state?.ageMillis)
             // A cached "complete" can belong to the previous handoff. Confirm it
             // against MySQL so a failed Redis write cannot expose stale data.
         }
-        return plugin.databaseManager.getSyncState(uuid)?.status?.let(::normalizeSyncStatus)
+        return SyncSnapshot(mysqlStatus, state?.ageMillis)
     }
+
+    fun getSyncStatus(uuid: UUID): String? = getSyncSnapshot(uuid).status
 
     private fun normalizeSyncStatus(status: String): String = when (status.lowercase()) {
         "true" -> "complete"
