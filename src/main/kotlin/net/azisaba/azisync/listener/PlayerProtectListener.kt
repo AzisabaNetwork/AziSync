@@ -13,7 +13,7 @@ import org.bukkit.event.inventory.InventoryDragEvent
 import org.bukkit.event.player.PlayerDropItemEvent
 import org.bukkit.event.player.PlayerInteractEntityEvent
 import org.bukkit.event.player.PlayerInteractEvent
-import org.bukkit.event.player.PlayerPickupItemEvent
+import org.bukkit.event.entity.EntityPickupItemEvent
 import org.bukkit.event.player.PlayerSwapHandItemsEvent
 import org.bukkit.entity.Player
 import java.util.UUID
@@ -86,8 +86,9 @@ class PlayerProtectListener(private val plugin: AziSync) : Listener {
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
-    fun onPlayerPickupItem(event: PlayerPickupItemEvent) {
-        handleBlock(event.player, event)
+    fun onPlayerPickupItem(event: EntityPickupItemEvent) {
+        val player = event.entity as? Player ?: return
+        handleBlock(player, event)
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)

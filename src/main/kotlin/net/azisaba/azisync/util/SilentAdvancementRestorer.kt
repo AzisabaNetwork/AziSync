@@ -87,7 +87,7 @@ object SilentAdvancementRestorer {
         // visibility/progress-changed sets. During pre-login they are all safe to
         // invalidate; the first normal sync rebuilds visibility before sending it.
         allFields(manager.javaClass)
-            .filter { java.util.Set::class.java.isAssignableFrom(it.type) }
+            .filter { Set::class.java.isAssignableFrom(it.type) }
             .forEach { field ->
                 runCatching {
                     field.isAccessible = true

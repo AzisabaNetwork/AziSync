@@ -183,7 +183,7 @@ class OfflineInventoryListener(private val plugin: AziSync) : Listener {
 
         // 41: オフハンド
         if (!isItemEqual(gui.getItem(OfflineInventoryManager.OFFHAND_SLOT), offhand)) {
-            gui.setItem(OfflineInventoryManager.OFFHAND_SLOT, offhand?.clone())
+            gui.setItem(OfflineInventoryManager.OFFHAND_SLOT, offhand.clone())
         }
     }
 
