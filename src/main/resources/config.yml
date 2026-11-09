@@ -80,9 +80,12 @@ general:
   # An 'active' row older than staleMillis is treated as a crashed server and loading proceeds;
   # a 'saving' row older than staleMillis is treated as a failed sync (see kickOnFailedSync).
   # All servers must run the same AziSync version, since older versions do not know 'active'.
+  # The advancement preload (pre-login) never waits on 'active': the proxy keeps the player on
+  # the previous server until login finishes, so it uses the last saved copy and merges the
+  # final copy after join instead of stalling the /server switch.
   syncWait:
-    handoffGraceMillis: 100
-    pollMillis: 50
+    handoffGraceMillis: 0
+    pollMillis: 25
     timeoutMillis: 10000
     lockTimeoutSeconds: 10
     staleMillis: 30000

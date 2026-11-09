@@ -29,7 +29,7 @@ class PlayerJoinListener(private val plugin: AziSync) : Listener {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
             when (plugin.syncManager.awaitHandoff(uuid, playerName)) {
-                SyncManager.HandoffResult.READY -> Unit
+                SyncManager.HandoffResult.READY, SyncManager.HandoffResult.PROVISIONAL -> Unit
                 SyncManager.HandoffResult.UNAVAILABLE -> return@Runnable
                 SyncManager.HandoffResult.TIMEOUT -> {
                     // The previous server has not finished saving. Loading now would apply stale

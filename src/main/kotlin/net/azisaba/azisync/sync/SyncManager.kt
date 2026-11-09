@@ -53,7 +53,14 @@ class SyncManager(private val plugin: AziSync) {
         syncStateExecutor.scheduleAtFixedRate({ heartbeat() }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS)
     }
 
-    enum class HandoffResult { READY, FAILED, TIMEOUT, UNAVAILABLE }
+    /**
+     * PROVISIONAL: another server still owns the player (sync state 'active'). Only returned when
+     * the caller asked not to wait for that owner, i.e. during pre-login of a proxy server switch.
+     */
+    enum class HandoffResult { READY, FAILED, TIMEOUT, UNAVAILABLE, PROVISIONAL }
+
+    /** Players whose advancement preload read data before the previous server's quit save. */
+    private val provisionalAdvancementPreload = ConcurrentHashMap.newKeySet<UUID>()
 
     fun isLoaded(player: Player): Boolean {
         return loadedPlayers[player.uniqueId] ?: false
@@ -95,11 +102,13 @@ class SyncManager(private val plugin: AziSync) {
      * Blocks (call off the main thread) until the previous server has finished handing the
      * player's data over. Returns READY only when it is safe to read the stored data.
      */
-    fun awaitHandoff(uuid: UUID, playerName: String): HandoffResult {
-        val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 50L).coerceIn(10L, 250L)
+    fun awaitHandoff(uuid: UUID, playerName: String, waitWhileActive: Boolean = true): HandoffResult {
+        val pollMillis = plugin.config.getLong("general.syncWait.pollMillis", 25L).coerceIn(10L, 250L)
         val timeoutMillis = plugin.config.getLong("general.syncWait.timeoutMillis", 10000L).coerceAtLeast(0L)
-        val graceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 100L).coerceAtLeast(0L)
-        if (graceMillis > 0) Thread.sleep(graceMillis)
+        // 'active' already covers "the previous server has not started its quit save yet",
+        // so a fixed grace sleep only adds latency. Kept configurable for mixed-version setups.
+        val graceMillis = plugin.config.getLong("general.syncWait.handoffGraceMillis", 0L).coerceAtLeast(0L)
+        if (waitWhileActive && graceMillis > 0) Thread.sleep(graceMillis)
         val waitStarted = System.nanoTime()
 
         while (true) {
@@ -122,6 +131,11 @@ class SyncManager(private val plugin: AziSync) {
                 status == "active" -> if (ageMillis != null && ageMillis >= staleMillis) {
                     plugin.logger.warning("Sync state for $playerName is 'active' but stale (${ageMillis}ms); assuming the previous server died.")
                     return HandoffResult.READY
+                } else if (!waitWhileActive) {
+                    // During pre-login the proxy keeps the player on the previous server until this
+                    // login finishes, so its quit save cannot start yet: waiting here would only
+                    // stall the switch until timeout.
+                    return HandoffResult.PROVISIONAL
                 }
                 status == "saving" -> if (ageMillis != null && ageMillis >= staleMillis) {
                     plugin.logger.warning("Sync state for $playerName is stuck in 'saving' (${ageMillis}ms); treating it as failed.")
@@ -463,14 +477,21 @@ class SyncManager(private val plugin: AziSync) {
     fun preloadAdvancements(uuid: UUID, playerName: String) {
         advancementPreloadHandled.add(uuid)
         preloadedAdvancements.remove(uuid)
+        provisionalAdvancementPreload.remove(uuid)
         if (!plugin.databaseManager.isAvailable()) {
             logAdvancement("PRELOAD_SKIPPED_DATABASE_UNAVAILABLE", uuid, playerName, warning = true)
             return
         }
 
         try {
-            when (awaitHandoff(uuid, playerName)) {
+            when (awaitHandoff(uuid, playerName, waitWhileActive = false)) {
                 HandoffResult.READY -> Unit
+                // Server switch in progress: use the last saved copy now (merge is additive) and
+                // pick up anything newer from the previous server's quit save after join.
+                HandoffResult.PROVISIONAL -> {
+                    provisionalAdvancementPreload.add(uuid)
+                    logAdvancement("PRELOAD_PROVISIONAL_SWITCH_IN_PROGRESS", uuid, playerName)
+                }
                 HandoffResult.FAILED -> {
                     logAdvancement("PRELOAD_SKIPPED_FAILED_SYNC", uuid, playerName, warning = true)
                     return
@@ -727,7 +748,31 @@ class SyncManager(private val plugin: AziSync) {
 
                 // Advancements
                 if (plugin.config.getBoolean("general.enableModules.shareAdvancement", false)) {
-                    if (advancementPreloadHandled.contains(uuid)) {
+                    if (provisionalAdvancementPreload.remove(uuid)) {
+                        // The pre-login preload ran before the previous server's quit save. Now that
+                        // the handoff is complete, merge the final copy so criteria earned there are
+                        // not lost (and later overwritten by this server's save).
+                        try {
+                            val data = plugin.databaseManager.advancementHandler.getData(uuid, playerName)
+                            if (data != null && data.advancements != "none") {
+                                val decoded = AdvancementSerializer.fromBase64(data.advancements)
+                                Bukkit.getScheduler().runTask(plugin, Runnable {
+                                    if (!player.isOnline || loadFailed.get()) return@Runnable
+                                    try {
+                                        val result = AdvancementSerializer.merge(player, decoded)
+                                        logAdvancement("POST_HANDOFF_MERGE_APPLIED", uuid, playerName,
+                                            "savedAdvancements" to result.savedAdvancements,
+                                            "awardedCriteria" to result.awardedCriteria,
+                                            "restoreFailures" to result.restoreFailures)
+                                    } catch (e: Exception) {
+                                        failLoad("advancements (apply)", e)
+                                    }
+                                })
+                            }
+                        } catch (e: Exception) {
+                            failLoad("advancements", e)
+                        }
+                    } else if (advancementPreloadHandled.contains(uuid)) {
                         logAdvancement("POST_JOIN_APPLY_SKIPPED_PRELOADED", uuid, playerName)
                     } else {
                         // Never restore through Bukkit after the initial advancement packet:
@@ -927,6 +972,7 @@ class SyncManager(private val plugin: AziSync) {
         economyReadyPlayers.remove(uuid)
         preloadedAdvancements.remove(uuid)
         advancementPreloadHandled.remove(uuid)
+        provisionalAdvancementPreload.remove(uuid)
     }
 
     fun isEconomyReady(uuid: UUID): Boolean = economyReadyPlayers.contains(uuid)
