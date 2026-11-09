@@ -103,6 +103,14 @@ debugMessage:
   InventorySync: false
   HealthSync: false
 
+# Integrations with other plugins
+hooks:
+  mythicItemIdCompat:
+    # MythicItemIdCompat が入っていれば、MythicMobs 4 (1.15.2) の MYTHIC_TYPE を持つアイテムに
+    # 読み込み・MPDB移行時に mythicmobs:type を付け、反映後にインベントリの自動修復を呼びます。
+    # 除外MMIDは MythicItemIdCompat の excluded-mmids に従います。
+    enabled: true
+
 # Data migration from other plugins
 migration:
   mpdb:

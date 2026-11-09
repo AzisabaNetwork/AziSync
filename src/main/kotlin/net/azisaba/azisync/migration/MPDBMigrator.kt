@@ -1,6 +1,7 @@
 package net.azisaba.azisync.migration
 
 import net.azisaba.azisync.AziSync
+import net.azisaba.azisync.hook.MythicItemIdCompatHook
 import net.azisaba.azisync.util.ItemSerializer
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
@@ -16,16 +17,62 @@ class MPDBMigrator(private val plugin: AziSync) {
     private val isMigrating = AtomicBoolean(false)
     private val charSet = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 
-    private fun convertItemFormat(raw: String, defaultSize: Int): String {
+    /** Collects what happened to the item data of one migration (or verify) run. */
+    private class ItemReport {
+        val stats = ItemSerializer.DecodeStats()
+        var rowsConverted = 0
+        var rowsKeptRaw = 0
+        val problems = ArrayList<String>()
+
+        @Synchronized
+        fun addStats(row: ItemSerializer.DecodeStats) = stats.add(row)
+
+        @Synchronized
+        fun converted() {
+            rowsConverted++
+        }
+
+        @Synchronized
+        fun keptRaw(owner: String, reason: String) {
+            rowsKeptRaw++
+            problems.add("$owner: $reason")
+        }
+    }
+
+    @Volatile
+    private var currentReport: ItemReport? = null
+
+    /**
+     * Upgrades one MPDB item column to AziSync's format. A row is only rewritten when every item went
+     * through the server's DataConverter; otherwise the original MPDB data is stored unchanged (it is
+     * decoded again on join), so a later run with a corrected `sourceDataVersion` can still convert it
+     * losslessly. Every decision is recorded in the run's report.
+     */
+    private fun convertItemFormat(raw: String, defaultSize: Int, owner: String): String {
         if (raw.isBlank() || raw == "none") return "none"
+        val report = currentReport
+        val rowStats = ItemSerializer.DecodeStats()
         return try {
-            val items = ItemSerializer.fromBase64(raw, defaultSize)
-            ItemSerializer.toBase64(items)
+            val items = ItemSerializer.withStats(rowStats) { ItemSerializer.fromBase64(raw, defaultSize, strict = true) }
+            report?.addStats(rowStats)
+            if (rowStats.lossyFallback > 0) {
+                val ids = rowStats.lossyIds.entries.joinToString { "${it.key} x${it.value}" }
+                report?.keptRaw(owner, "${rowStats.lossyFallback} item(s) could not be upgraded by DataConverter, kept MPDB data [$ids] ${rowStats.lastConverterError ?: ""}".trim())
+                raw
+            } else {
+                report?.converted()
+                ItemSerializer.toBase64(items)
+            }
         } catch (e: Exception) {
-            plugin.logger.warning("[AziSync] Failed to re-encode item data during migration, saving original: ${e.message}")
+            report?.addStats(rowStats)
+            report?.keptRaw(owner, "decode failed, kept MPDB data: ${e.message}")
+            plugin.logger.warning("[AziSync] Failed to re-encode item data of $owner during migration, saving original: ${e.message}")
             raw
         }
     }
+
+    private fun ownerLabel(uuid: String, name: String?, column: String): String =
+        "${name?.takeIf { it.isNotBlank() } ?: "?"} ($uuid) $column"
 
     companion object {
         fun normalizeUuid(raw: String?): String? {
@@ -114,8 +161,9 @@ class MPDBMigrator(private val plugin: AziSync) {
                                     val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
-                                    insertStmt.setString(3, convertItemFormat(rs.getString("inventory") ?: "", 36))
-                                    insertStmt.setString(4, convertItemFormat(rs.getString("armor") ?: "", 4))
+                                    val name = rs.getString("player_name")
+                                    insertStmt.setString(3, convertItemFormat(rs.getString("inventory") ?: "", 36, ownerLabel(uuid, name, "inventory")))
+                                    insertStmt.setString(4, convertItemFormat(rs.getString("armor") ?: "", 4, ownerLabel(uuid, name, "armor")))
                                     insertStmt.setInt(5, rs.getInt("hotbar_slot"))
                                     insertStmt.setInt(6, rs.getInt("gamemode"))
                                     insertStmt.setString(7, rs.getString("sync_complete") ?: "true")
@@ -185,7 +233,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                                     val uuid = normalizeUuid(rawUuid) ?: continue
                                     insertStmt.setString(1, uuid)
                                     insertStmt.setString(2, rs.getString("player_name") ?: "")
-                                    insertStmt.setString(3, convertItemFormat(rs.getString("enderchest") ?: "", 27))
+                                    insertStmt.setString(3, convertItemFormat(rs.getString("enderchest") ?: "", 27, ownerLabel(uuid, rs.getString("player_name"), "enderchest")))
                                     insertStmt.setString(4, rs.getString("sync_complete") ?: "true")
                                     insertStmt.setString(5, rs.getString("last_seen") ?: System.currentTimeMillis().toString())
                                     insertStmt.addBatch()
@@ -854,6 +902,10 @@ class MPDBMigrator(private val plugin: AziSync) {
                 }
 
                 val sourceInfo = resolveSourceInfo()
+                val report = ItemReport()
+                currentReport = report
+                val migratesItems = targetModules.any { it.id == "inventory" || it.id == "enderchest" }
+                if (migratesItems) warnItemPrerequisites(sender)
                 plugin.messageManager.sendMessage(sender, "migrate_started")
                 plugin.logger.info("Starting MPDB data migration from ${sourceInfo.description}...")
 
@@ -922,6 +974,7 @@ class MPDBMigrator(private val plugin: AziSync) {
                     mapOf("{total}" to totalMigrated.toString())
                 )
                 plugin.logger.info("MPDB data migration completed successfully! Total records: $totalMigrated")
+                if (migratesItems) sendItemReport(sender, report, dryRun = false)
             } catch (e: Exception) {
                 plugin.logger.severe("MPDB data migration failed: ${e.message}")
                 e.printStackTrace()
@@ -931,8 +984,120 @@ class MPDBMigrator(private val plugin: AziSync) {
                     mapOf("{error}" to (e.message ?: e.toString()))
                 )
             } finally {
+                currentReport = null
                 isMigrating.set(false)
             }
         })
     }
+
+    /**
+     * Decodes every MPDB inventory, armor and ender chest exactly like the migration would, without
+     * writing anything, and reports which players would lose item data.
+     */
+    fun verify(sender: CommandSender) {
+        if (!isMigrating.compareAndSet(false, true)) {
+            plugin.messageManager.sendMessage(sender, "migrate_already_running")
+            return
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, Runnable {
+            val report = ItemReport()
+            currentReport = report
+            try {
+                val sourceInfo = resolveSourceInfo()
+                sender.sendMessage("§6[AziSync] §eMPDBのアイテムデータを検証しています（書き込みはしません）: ${sourceInfo.description}")
+                warnItemPrerequisites(sender)
+                val targets = listOf(
+                    modules.first { it.id == "inventory" } to listOf("inventory" to 36, "armor" to 4),
+                    modules.first { it.id == "enderchest" } to listOf("enderchest" to 27)
+                )
+                getSourceConnection(sourceInfo).use { conn ->
+                    for ((module, columns) in targets) {
+                        val table = findActualTableName(conn, getConfiguredMpdbTable(module, sourceInfo.mpdbYaml)) ?: continue
+                        val select = "SELECT player_uuid, player_name, ${columns.joinToString { "`${it.first}`" }} FROM `$table`"
+                        var rows = 0
+                        conn.prepareStatement(select).use { stmt ->
+                            stmt.fetchSize = 200
+                            stmt.executeQuery().use { rs ->
+                                while (rs.next()) {
+                                    val uuid = normalizeUuid(rs.getString("player_uuid")) ?: continue
+                                    val name = rs.getString("player_name")
+                                    for ((column, size) in columns) {
+                                        convertItemFormat(rs.getString(column) ?: "", size, ownerLabel(uuid, name, column))
+                                    }
+                                    rows++
+                                    if (rows % 1000 == 0) sender.sendMessage("§7[AziSync] ${module.displayName}: ${rows}件を検証済み")
+                                }
+                            }
+                        }
+                    }
+                }
+                sendItemReport(sender, report, dryRun = true)
+            } catch (e: Exception) {
+                plugin.logger.severe("MPDB item verification failed: ${e.message}")
+                e.printStackTrace()
+                plugin.messageManager.sendMessage(sender, "migrate_failed", mapOf("{error}" to (e.message ?: e.toString())))
+            } finally {
+                currentReport = null
+                isMigrating.set(false)
+            }
+        })
+    }
+
+    private fun warnItemPrerequisites(sender: CommandSender) {
+        if (!ItemSerializer.canUseDataConverter()) {
+            sender.sendMessage("§6[AziSync] §cこのサーバーでは DataConverter (ItemStack.deserializeBytes) を使えません。NBT付きのアイテムは変換せず、MPDBのデータのまま保存します。1.21.11 のサーバーで実行してください。")
+        }
+        if (!MythicItemIdCompatHook.isAvailable()) {
+            sender.sendMessage("§6[AziSync] §eMythicItemIdCompat が有効ではありません。MMアイテムの旧タグ (MYTHIC_TYPE) は残りますが、mythicmobs:type は付きません。")
+        }
+    }
+
+    private fun sendItemReport(sender: CommandSender, report: ItemReport, dryRun: Boolean) {
+        val s = report.stats
+        val title = if (dryRun) "MPDBアイテム検証結果（変更なし）" else "MPDBアイテム移行結果"
+        sender.sendMessage("§6[AziSync] §a=== $title ===")
+        sender.sendMessage("§7・変換した列: §a${report.rowsConverted}§7 / MPDBのデータのまま残した列: ${if (report.rowsKeptRaw > 0) "§c" else "§a"}${report.rowsKeptRaw}")
+        sender.sendMessage("§7・DataConverter で変換: §a${s.converted}§7個 / NBT付きで手作業再構築（欠損あり）: ${if (s.lossyFallback > 0) "§c" else "§a"}${s.lossyFallback}§7個 / NBT無しで再構築: §f${s.plainFallback}§7個")
+        if (MythicItemIdCompatHook.isAvailable()) {
+            sender.sendMessage("§7・MMアイテム (MYTHIC_TYPE): §f${s.mythicItems}§7個 / mythicmobs:type 付与 §a${s.mythicTagged}§7個 / 除外 §f${s.mythicExcluded}§7個")
+        } else {
+            sender.sendMessage("§7・MMアイテム (MYTHIC_TYPE): §f${s.mythicItems}§7個 §e（MythicItemIdCompat が無効なのでID付与なし）")
+        }
+        if (s.lossyIds.isNotEmpty()) {
+            sender.sendMessage("§7・欠損するアイテム: §c" + s.lossyIds.entries.sortedByDescending { it.value }.take(10).joinToString { "${it.key} x${it.value}" })
+        }
+        val file = writeReportFile(report, dryRun)
+        if (file != null) sender.sendMessage("§7・詳細: §f${file.path}")
+        if (report.rowsKeptRaw > 0) {
+            sender.sendMessage("§e  MPDBのデータのまま残した列は、参加時に改めて変換されます。sourceDataVersion を見直して再実行すると、欠損なく変換できる場合があります。")
+        }
+    }
+
+    private fun writeReportFile(report: ItemReport, dryRun: Boolean): File? {
+        return try {
+            val dir = File(plugin.dataFolder, "migration-reports").apply { mkdirs() }
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(java.util.Date())
+            val file = File(dir, "mpdb-${if (dryRun) "verify" else "migrate"}-$stamp.txt")
+            val s = report.stats
+            val problems = synchronized(report) { report.problems.toList() }
+            val text = buildString {
+                append("MPDB item ").append(if (dryRun) "verification (no changes)" else "migration").append(' ').append(stamp).append('\n')
+                append("sourceDataVersion=${ItemSerializer.legacyDataVersion} dataConverter=${ItemSerializer.canUseDataConverter()} mythicItemIdCompat=${MythicItemIdCompatHook.isAvailable()}\n")
+                append("columns converted=${report.rowsConverted} keptRaw=${report.rowsKeptRaw}\n")
+                append("items dataConverter=${s.converted} lossyFallback=${s.lossyFallback} plainFallback=${s.plainFallback}\n")
+                append("mythic items=${s.mythicItems} tagged=${s.mythicTagged} excluded=${s.mythicExcluded}\n")
+                s.lastConverterError?.let { append("last DataConverter error: ").append(it).append('\n') }
+                append("\n== Item types rebuilt with loss ==\n")
+                s.lossyIds.entries.sortedByDescending { it.value }.forEach { append(it.key).append('\t').append(it.value).append('\n') }
+                append("\n== Columns kept as MPDB data ==\n")
+                problems.forEach { append(it).append('\n') }
+            }
+            file.writeText(text, Charsets.UTF_8)
+            file
+        } catch (e: Exception) {
+            plugin.logger.warning("Could not write the migration report: ${e.message}")
+            null
+        }
+    }
 }
+

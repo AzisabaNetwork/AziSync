@@ -112,6 +112,8 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                     if (args.size >= 3) {
                         if (args[2].lowercase() == "confirm") {
                             plugin.mpdbMigrator.migrate(sender)
+                        } else if (args[2].lowercase() == "verify") {
+                            plugin.mpdbMigrator.verify(sender)
                         } else {
                             val module = args[2].lowercase()
                             if (args.size >= 4 && args[3].lowercase() == "confirm") {
@@ -184,7 +186,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[2].lowercase()) }.toMutableList()
             }
             if (args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {
-                val moduleNames = listOf("confirm", "economy", "inventory", "enderchest", "experience", "potionEffects", "advancement", "healthFoodAir", "location")
+                val moduleNames = listOf("confirm", "verify", "economy", "inventory", "enderchest", "experience", "potionEffects", "advancement", "healthFoodAir", "location")
                 return moduleNames.filter { it.lowercase().startsWith(args[2].lowercase()) }.toMutableList()
             }
         } else if (args.size == 4 && args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {

@@ -12,6 +12,7 @@ softdepend:
   - ChestShop
   - ShopChest
   - CrazyAuctions
+  - MythicItemIdCompat
 commands:
   azisync:
     description: AziSync command

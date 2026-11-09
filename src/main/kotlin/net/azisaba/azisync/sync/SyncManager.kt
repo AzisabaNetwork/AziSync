@@ -1,5 +1,6 @@
 package net.azisaba.azisync.sync
 
+import net.azisaba.azisync.hook.MythicItemIdCompatHook
 import net.azisaba.azisync.AziSync
 import net.azisaba.azisync.database.DatabaseManager
 import net.azisaba.azisync.util.AdvancementSerializer
@@ -590,6 +591,9 @@ class SyncManager(private val plugin: AziSync) {
                             Bukkit.getScheduler().runTask(plugin, Runnable {
                                 if (!player.isOnline || loadFailed.get()) return@Runnable
                                 try {
+                                    // Legacy (MythicMobs 4) items get their MMID before they reach the inventory.
+                                    MythicItemIdCompatHook.preserve(contents)
+                                    MythicItemIdCompatHook.preserve(armor)
                                     if (contents != null) {
                                         // storageContents only accepts up to 36 slots; older payloads may be
                                         // 37-40 long, so always split instead of assigning the raw array.
@@ -605,9 +609,13 @@ class SyncManager(private val plugin: AziSync) {
                                         player.inventory.setArmorContents(armor)
                                     }
                                     if (loadGameMode) {
+                                        @Suppress("DEPRECATION") // Game mode is stored as its legacy int value.
                                         val gm = GameMode.getByValue(invData.gamemode)
                                         if (gm != null) player.gameMode = gm
                                     }
+                                    // MythicItemIdCompat's join repair has usually run before this async load
+                                    // finished, so run it again on the inventory that was just applied.
+                                    MythicItemIdCompatHook.repairInventory(player)
                                     player.updateInventory()
                                 } catch (e: Exception) {
                                     failLoad("inventory (apply)", e)
@@ -628,6 +636,7 @@ class SyncManager(private val plugin: AziSync) {
                             Bukkit.getScheduler().runTask(plugin, Runnable {
                                 if (!player.isOnline || loadFailed.get()) return@Runnable
                                 try {
+                                    MythicItemIdCompatHook.preserve(contents)
                                     player.enderChest.contents = contents.copyOf(player.enderChest.size)
                                 } catch (e: Exception) {
                                     failLoad("ender chest (apply)", e)

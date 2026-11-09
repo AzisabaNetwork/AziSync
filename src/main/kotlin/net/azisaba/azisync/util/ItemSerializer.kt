@@ -339,31 +339,198 @@ object ItemSerializer {
         return name == "AIR" || name.endsWith("_AIR")
     }
 
+    /**
+     * What happened to the items decoded on one thread. The MPDB migrator installs one with
+     * [withStats] to decide whether a row was converted without loss and to build its report.
+     */
+    class DecodeStats {
+        /** Items upgraded by the server's own DataConverter (lossless). */
+        var converted = 0
+        /** Items with NBT that had to be rebuilt by hand; custom NBT, shulker contents, books... are lost. */
+        var lossyFallback = 0
+        /** Items without NBT rebuilt by hand (nothing to lose). */
+        var plainFallback = 0
+        /** Items carrying a MythicMobs 4 MYTHIC_TYPE tag (including ones nested in shulker boxes). */
+        var mythicItems = 0
+        /** MythicMobs items that received mythicmobs:type through MythicItemIdCompat's rules. */
+        var mythicTagged = 0
+        /** MythicMobs items skipped because MythicItemIdCompat excludes their MMID. */
+        var mythicExcluded = 0
+        val lossyIds = LinkedHashMap<String, Int>()
+        var lastConverterError: String? = null
+
+        fun add(other: DecodeStats) {
+            converted += other.converted
+            lossyFallback += other.lossyFallback
+            plainFallback += other.plainFallback
+            mythicItems += other.mythicItems
+            mythicTagged += other.mythicTagged
+            mythicExcluded += other.mythicExcluded
+            for ((k, v) in other.lossyIds) lossyIds[k] = (lossyIds[k] ?: 0) + v
+            if (other.lastConverterError != null) lastConverterError = other.lastConverterError
+        }
+    }
+
+    private val statsHolder = ThreadLocal<DecodeStats?>()
+
+    fun <T> withStats(stats: DecodeStats, block: () -> T): T {
+        val previous = statsHolder.get()
+        statsHolder.set(stats)
+        try {
+            return block()
+        } finally {
+            if (previous == null) statsHolder.remove() else statsHolder.set(previous)
+        }
+    }
+
+    /**
+     * Set while MythicItemIdCompat is enabled: returns true when an MMID is in its `excluded-mmids`.
+     * When set, MythicMobs 4 `MYTHIC_TYPE` tags get a `mythicmobs:type` PDC entry before conversion,
+     * exactly like MythicItemIdCompat does for offline playerdata. Must be thread-safe.
+     */
+    @Volatile
+    var mythicIdExcluded: ((String) -> Boolean)? = null
+
+    private var converterFailureLogs = 0
+
     private fun parseItem(compound: Map<String, Any?>): ItemStack? {
         val id = compound["id"]?.toString() ?: return null
         if (id.isEmpty() || id == "minecraft:air" || id == "air") return null
+        val stats = statsHolder.get()
 
-        // 1. If data is modern Paper component format without legacy "tag", attempt Paper deserializeBytes
-        val hasLegacyTag = compound.containsKey("tag")
-        if (!hasLegacyTag) {
-            try {
-                val deserializeMethod = getPaperDeserializeBytesMethod()
-                if (deserializeMethod != null) {
-                    val nbtBytes = writeSingleItemNbt(compound)
-                    val item = deserializeMethod.invoke(null, nbtBytes) as? ItemStack
-                    if (item != null && !isAir(item.type)) {
-                        enrichItemMeta(item, compound)
-                        return item
-                    }
+        tagLegacyMythicIds(compound, stats, 0)
+        val hasLegacyTag = compound["tag"] is Map<*, *>
+        if (hasLegacyTag) {
+            normalizeLegacySkull(compound)
+            renameLegacyAttributes(compound["tag"], 0)
+        }
+        val hasNbt = hasLegacyTag || (compound["components"] as? Map<*, *>)?.isNotEmpty() == true
+
+        // 1. Let the server's DataConverter upgrade the item. It understands every vanilla change since
+        //    the source DataVersion (tag -> components, heads, attributes, potions, shulker contents...)
+        //    and keeps unknown NBT such as MYTHIC_TYPE / PublicBukkitValues in minecraft:custom_data.
+        try {
+            val deserializeMethod = getPaperDeserializeBytesMethod()
+            if (deserializeMethod != null) {
+                val nbtBytes = writeSingleItemNbt(compound)
+                val item = deserializeMethod.invoke(null, nbtBytes) as? ItemStack
+                if (item != null && !isAir(item.type)) {
+                    if (!hasLegacyTag) enrichItemMeta(item, compound)
+                    stats?.let { it.converted++ }
+                    return item
                 }
-            } catch (_: Throwable) {
-                // Silently fallback without spamming logs
+            }
+        } catch (t: Throwable) {
+            val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            val message = "${cause.javaClass.simpleName}: ${cause.message}"
+            stats?.lastConverterError = message
+            if (hasNbt && converterFailureLogs < 10) {
+                converterFailureLogs++
+                Bukkit.getLogger().warning("[AziSync] DataConverter could not upgrade item '$id', rebuilding it by hand (NBT may be lost): $message")
             }
         }
 
-        // 2. Pure Bukkit API construction (handles both 1.15.2 legacy NBT and modern formats completely)
-        return buildItemViaBukkit(compound)
+        // 2. Hand-built fallback for servers without ItemStack.deserializeBytes (pre-1.16) or data the
+        //    converter rejects. Only the common meta survives; the stats mark such items as lossy.
+        val built = buildItemViaBukkit(compound)
+        if (built != null && stats != null) {
+            if (hasNbt) {
+                stats.lossyFallback++
+                stats.lossyIds[id] = (stats.lossyIds[id] ?: 0) + 1
+            } else {
+                stats.plainFallback++
+            }
+        }
+        return built
     }
+
+    /**
+     * 1.15.2 named attributes in camelCase (`generic.attackDamage`). Paper 1.21.11's DataConverter does not
+     * rename them and rejects the whole item ("Not a valid resource location"), so they are rewritten to the
+     * 1.16 form (`minecraft:generic.attack_damage`), which the later fixes upgrade to `minecraft:attack_damage`.
+     * Covers nested items too (shulker box contents). Same rule as RyuZUInfiniteShop's LegacyAttributeMigration.
+     */
+    private fun renameLegacyAttributes(node: Any?, depth: Int) {
+        if (depth > 64) return
+        when (node) {
+            is Map<*, *> -> {
+                val modifiers = node["AttributeModifiers"] as? List<*>
+                modifiers?.forEach { modifier ->
+                    @Suppress("UNCHECKED_CAST")
+                    val m = modifier as? MutableMap<String, Any?> ?: return@forEach
+                    val name = m["AttributeName"] as? String ?: return@forEach
+                    m["AttributeName"] = legacyAttributeKey(name)
+                }
+                for (value in node.values) renameLegacyAttributes(value, depth + 1)
+            }
+            is List<*> -> for (value in node) renameLegacyAttributes(value, depth + 1)
+        }
+    }
+
+    internal fun legacyAttributeKey(raw: String): String {
+        val path = raw.trim().substringAfter(':')
+        val snake = path.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").lowercase()
+        return "minecraft:$snake"
+    }
+
+    /** 1.15.2 Paper could keep a head's profile under SkullProfile; vanilla (and DataConverter) read SkullOwner. */
+    private fun normalizeLegacySkull(compound: Map<String, Any?>) {
+        @Suppress("UNCHECKED_CAST")
+        val tag = compound["tag"] as? MutableMap<String, Any?> ?: return
+        if (tag["SkullOwner"] == null && tag["SkullProfile"] is Map<*, *>) {
+            tag["SkullOwner"] = tag.remove("SkullProfile")
+        }
+    }
+
+    /**
+     * Adds `PublicBukkitValues."mythicmobs:type"` (and the Prevent* flags) next to every leftover
+     * MythicMobs 4 `MYTHIC_TYPE`, including items nested in shulker boxes. Mirrors MythicItemIdCompat's
+     * OfflineNbtItemConverter, and only runs while MythicItemIdCompat is enabled so its exclusions apply.
+     */
+    private fun tagLegacyMythicIds(node: Any?, stats: DecodeStats?, depth: Int) {
+        if (depth > 64) return
+        when (node) {
+            is Map<*, *> -> {
+                @Suppress("UNCHECKED_CAST")
+                val map = node as MutableMap<String, Any?>
+                val type = (map["MYTHIC_TYPE"] as? String)?.trim()
+                if (!type.isNullOrEmpty()) {
+                    stats?.let { it.mythicItems++ }
+                    val isExcluded = mythicIdExcluded
+                    if (isExcluded != null) {
+                        if (isExcluded(type)) {
+                            stats?.let { it.mythicExcluded++ }
+                        } else {
+                            val existing = map["PublicBukkitValues"]
+                            @Suppress("UNCHECKED_CAST")
+                            val values = when (existing) {
+                                null -> LinkedHashMap<String, Any?>().also { map["PublicBukkitValues"] = it }
+                                is Map<*, *> -> existing as MutableMap<String, Any?>
+                                else -> null
+                            }
+                            if (values != null && !values.containsKey("mythicmobs:type")) {
+                                values["mythicmobs:type"] = type
+                                copyMythicFlag(map, values, "PreventAnvil", "mythicmobs:prevent_repairing_with")
+                                copyMythicFlag(map, values, "PreventCrafting", "mythicmobs:prevent_crafting_with")
+                                copyMythicFlag(map, values, "PreventEnchanting", "mythicmobs:prevent_enchanting")
+                                copyMythicFlag(map, values, "PreventSmithing", "mythicmobs:prevent_smithing_with")
+                                stats?.let { it.mythicTagged++ }
+                            }
+                        }
+                    }
+                }
+                for (value in map.values.toList()) tagLegacyMythicIds(value, stats, depth + 1)
+            }
+            is List<*> -> for (value in node) tagLegacyMythicIds(value, stats, depth + 1)
+        }
+    }
+
+    private fun copyMythicFlag(source: Map<String, Any?>, target: MutableMap<String, Any?>, oldName: String, newName: String) {
+        if (source.containsKey(oldName) && !target.containsKey(newName)) target[newName] = 1.toByte()
+    }
+
+    /** Whether this server can upgrade old item NBT with its own DataConverter (Paper 1.16+). */
+    fun canUseDataConverter(): Boolean = getPaperDeserializeBytesMethod() != null
 
     private fun getPaperDeserializeBytesMethod(): Method? {
         if (!paperDeserializeChecked) {
@@ -377,6 +544,7 @@ object ItemSerializer {
         return paperDeserializeMethod
     }
 
+    @Suppress("DEPRECATION") // Paper has no non-deprecated way to read the data version.
     private fun getServerDataVersion(): Int {
         try {
             val unsafe = Bukkit.getUnsafe()
@@ -899,6 +1067,7 @@ object ItemSerializer {
         return null
     }
 
+    @Suppress("DEPRECATION") // getByName is required to resolve legacy (MPDB) enchantment names.
     private fun findEnchantment(id: String?): Enchantment? {
         if (id.isNullOrBlank()) return null
         val clean = id.removePrefix("minecraft:").lowercase()

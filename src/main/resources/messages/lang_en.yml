@@ -29,7 +29,7 @@ help_rollback: "&a/azisync rollback <player> <id> &7- Rollback the specified pla
 sync_complete: "&aData synchronization completed."
 cannot_inspect_self: "&cYou cannot inspect your own inventory."
 inv_usage: "&cUsage: /inv <player>"
-help_migrate: "&a/azisync migrate mpdb [confirm] &7- Migrate data from MySQLPlayerDataBridge"
+help_migrate: "&a/azisync migrate mpdb [verify|confirm] &7- Verify or migrate data from MySQLPlayerDataBridge"
 migrate_scanning: "&eScanning tables in MPDB database ({target})..."
 migrate_scan_header: "&a=== MPDB Migration Preview ==="
 migrate_scan_found: "&b- {module} ({table}): &f{count} records"
