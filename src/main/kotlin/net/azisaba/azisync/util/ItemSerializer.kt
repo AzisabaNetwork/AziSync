@@ -403,6 +403,7 @@ object ItemSerializer {
         if (hasLegacyTag) {
             normalizeLegacySkull(compound)
             renameLegacyAttributes(compound["tag"], 0)
+            sanitizeLegacyTextComponents(compound["tag"], 0)
         }
         val hasNbt = hasLegacyTag || (compound["components"] as? Map<*, *>)?.isNotEmpty() == true
 
@@ -465,6 +466,106 @@ object ItemSerializer {
             }
             is List<*> -> for (value in node) renameLegacyAttributes(value, depth + 1)
         }
+    }
+
+    /** NBT keys whose string values hold JSON text components in 1.15.2 data. */
+    private val TEXT_COMPONENT_KEYS = setOf("pages", "Name", "Lore", "CustomName", "Text1", "Text2", "Text3", "Text4")
+
+    private val NAMED_TEXT_COLORS = setOf(
+        "black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray",
+        "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"
+    )
+
+    private val HEX_TEXT_COLOR = Regex("#[0-9a-fA-F]{6}")
+
+    private val componentGson = com.google.gson.GsonBuilder().disableHtmlEscaping().create()
+
+    /**
+     * 1.15.2 accepted any string as a text component `color` (e.g. `reset"` typed into a book editor plugin),
+     * but modern DataConverter throws "Invalid color name" and rejects the whole item, so written books
+     * lost all their pages. Invalid colors are repaired (`reset"` -> dropped, `Red` -> `red`) or removed.
+     * Covers book pages, display names/lore, signs and nested items (shulker contents). Strings are only
+     * rewritten when something was actually fixed.
+     */
+    private fun sanitizeLegacyTextComponents(node: Any?, depth: Int) {
+        if (depth > 64) return
+        when (node) {
+            is Map<*, *> -> {
+                @Suppress("UNCHECKED_CAST")
+                val map = node as MutableMap<String, Any?>
+                for (key in map.keys.toList()) {
+                    val value = map[key]
+                    if (key in TEXT_COMPONENT_KEYS) {
+                        when (value) {
+                            is String -> sanitizeComponentJson(value)?.let { map[key] = it }
+                            is List<*> -> {
+                                if (value.any { it is String }) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val list = value as MutableList<Any?>
+                                    for (i in list.indices) {
+                                        val s = list[i] as? String ?: continue
+                                        sanitizeComponentJson(s)?.let { list[i] = it }
+                                    }
+                                } else {
+                                    sanitizeLegacyTextComponents(value, depth + 1)
+                                }
+                            }
+                            else -> sanitizeLegacyTextComponents(value, depth + 1)
+                        }
+                    } else {
+                        sanitizeLegacyTextComponents(value, depth + 1)
+                    }
+                }
+            }
+            is List<*> -> for (value in node) sanitizeLegacyTextComponents(value, depth + 1)
+        }
+    }
+
+    /** Returns the repaired JSON, or null when the string is not JSON or needed no change. */
+    internal fun sanitizeComponentJson(raw: String): String? {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
+        val element = parseJsonElement(trimmed) ?: return null
+        if (!sanitizeComponentElement(element, 0)) return null
+        return componentGson.toJson(element)
+    }
+
+    private fun sanitizeComponentElement(element: JsonElement, depth: Int): Boolean {
+        if (depth > 64) return false
+        var changed = false
+        when {
+            element.isJsonArray -> for (child in element.asJsonArray) {
+                if (sanitizeComponentElement(child, depth + 1)) changed = true
+            }
+            element.isJsonObject -> {
+                val obj = element.asJsonObject
+                val color = obj.get("color")
+                if (color != null) {
+                    val raw = if (color.isJsonPrimitive) color.asString else null
+                    val fixed = raw?.let { normalizeTextColor(it) }
+                    if (fixed == null) {
+                        obj.remove("color")
+                        changed = true
+                    } else if (fixed != raw) {
+                        obj.addProperty("color", fixed)
+                        changed = true
+                    }
+                }
+                for ((_, child) in obj.entrySet()) {
+                    if (sanitizeComponentElement(child, depth + 1)) changed = true
+                }
+            }
+        }
+        return changed
+    }
+
+    /** Returns a color the modern parser accepts, or null when the color should be dropped. */
+    internal fun normalizeTextColor(raw: String): String? {
+        if (raw in NAMED_TEXT_COLORS || HEX_TEXT_COLOR.matches(raw)) return raw
+        val trimmed = raw.trim()
+        if (HEX_TEXT_COLOR.matches(trimmed)) return trimmed
+        val cleaned = trimmed.lowercase().filter { it in 'a'..'z' || it == '_' }
+        return cleaned.takeIf { it in NAMED_TEXT_COLORS }
     }
 
     internal fun legacyAttributeKey(raw: String): String {
