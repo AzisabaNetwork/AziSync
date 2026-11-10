@@ -431,7 +431,22 @@ object ItemSerializer {
             }
         }
 
-        // 2. Hand-built fallback for servers without ItemStack.deserializeBytes (pre-1.16) or data the
+        // 2. The converter rejected some vanilla data. Convert the plugin data alone (it only moves into
+        //    minecraft:custom_data, so it cannot be rejected) and rebuild the vanilla meta by hand on top.
+        //    Without this, plugin items such as Storage Boxes lost all their data (type, amount, contents).
+        if (hasLegacyTag) {
+            val preserved = convertCustomDataOnly(compound)
+            if (preserved != null) {
+                enrichItemMeta(preserved, compound)
+                stats?.let {
+                    it.lossyFallback++
+                    it.lossyIds[id] = (it.lossyIds[id] ?: 0) + 1
+                }
+                return preserved
+            }
+        }
+
+        // 3. Hand-built fallback for servers without ItemStack.deserializeBytes (pre-1.16) or data the
         //    converter rejects. Only the common meta survives; the stats mark such items as lossy.
         val built = buildItemViaBukkit(compound)
         if (built != null && stats != null) {
@@ -443,6 +458,149 @@ object ItemSerializer {
             }
         }
         return built
+    }
+
+    /** Root keys of a 1.15.2 item tag that hold vanilla data (everything else is plugin data). */
+    private val LEGACY_VANILLA_KEYS = setOf(
+        "display", "Enchantments", "StoredEnchantments", "ench", "Damage", "RepairCost", "Unbreakable", "HideFlags",
+        "AttributeModifiers", "CustomModelData", "SkullOwner", "SkullProfile", "Potion", "CustomPotionEffects",
+        "CustomPotionColor", "BlockEntityTag", "BlockStateTag", "EntityTag", "Fireworks", "Explosion", "pages",
+        "author", "title", "generation", "resolved", "CanDestroy", "CanPlaceOn", "map", "map_scale_direction",
+        "Decorations", "BucketVariantTag", "ChargedProjectiles", "Charged", "Recipes", "Effects", "LodestonePos",
+        "LodestoneDimension", "LodestoneTracked", "DebugProperty", "Items"
+    )
+
+    /**
+     * Converts the item with only its plugin data (the non-vanilla root keys of `tag`), so that data
+     * survives in minecraft:custom_data even when the vanilla part cannot be upgraded.
+     */
+    private fun convertCustomDataOnly(compound: Map<String, Any?>): ItemStack? {
+        val tag = compound["tag"] as? Map<*, *> ?: return null
+        val custom = LinkedHashMap<String, Any?>()
+        for ((k, v) in tag) {
+            val key = k?.toString() ?: continue
+            if (key !in LEGACY_VANILLA_KEYS) custom[key] = v
+        }
+        if (custom.isEmpty()) return null
+        val method = getPaperDeserializeBytesMethod() ?: return null
+        val reduced = LinkedHashMap(compound)
+        reduced["tag"] = custom
+        return try {
+            (method.invoke(null, writeSingleItemNbt(reduced)) as? ItemStack)?.takeUnless { isAir(it.type) }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    // ---- Raw NBT access (used to repair plugin items such as Storage Boxes) ----
+
+    private var serializeAsBytesMethod: Method? = null
+    private var serializeAsBytesChecked = false
+
+    private fun getSerializeAsBytesMethod(): Method? {
+        if (!serializeAsBytesChecked) {
+            serializeAsBytesChecked = true
+            serializeAsBytesMethod = try {
+                ItemStack::class.java.getMethod("serializeAsBytes")
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        return serializeAsBytesMethod
+    }
+
+    /** Whether items can be read and written as NBT on this server (Paper 1.16+). */
+    fun canEditItemNbt(): Boolean = getSerializeAsBytesMethod() != null && getPaperDeserializeBytesMethod() != null
+
+    /**
+     * The item compounds of an NBT encoded item column (MPDB format), without converting them, or
+     * null when the data is not NBT (e.g. BukkitObjectOutputStream).
+     */
+    fun rawItemCompounds(data: String): List<Map<String, Any?>>? {
+        if (data.isBlank() || data == "none") return emptyList()
+        val bytes = try {
+            Base64Coder.decodeLines(data)
+        } catch (_: Throwable) {
+            try {
+                java.util.Base64.getDecoder().decode(data.trim())
+            } catch (_: Throwable) {
+                return null
+            }
+        }
+        if (bytes.isEmpty()) return emptyList()
+        if (bytes.size >= 2 && bytes[0] == 0xAC.toByte() && bytes[1] == 0xED.toByte()) return null
+        val payload = try {
+            readNbt(bytes)
+        } catch (_: Throwable) {
+            return null
+        }
+        @Suppress("UNCHECKED_CAST")
+        return when (payload) {
+            is List<*> -> payload.filterIsInstance<Map<String, Any?>>()
+            is Map<*, *> -> {
+                val inner = (payload["Inventory"] ?: payload["items"] ?: payload["inventory"] ?: payload["Items"]) as? List<*>
+                inner?.filterIsInstance<Map<String, Any?>>() ?: listOf(payload as Map<String, Any?>)
+            }
+            else -> emptyList()
+        }
+    }
+
+    /** Converts one raw item compound exactly like a decode does; `stats` tells whether it was lossless. */
+    fun convertRawItem(compound: Map<String, Any?>, stats: DecodeStats): ItemStack? {
+        @Suppress("UNCHECKED_CAST")
+        val copy = deepCopy(compound) as Map<String, Any?>
+        return withStats(stats) { parseItem(copy) }?.takeUnless { isAir(it.type) }
+    }
+
+    /** The item as NBT in the running server's format, or null when this server cannot do it. */
+    fun itemToNbt(item: ItemStack): MutableMap<String, Any?>? {
+        val method = getSerializeAsBytesMethod() ?: return null
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            readNbt(method.invoke(item) as ByteArray) as? MutableMap<String, Any?>
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Builds an item from NBT produced by [itemToNbt]. */
+    fun itemFromNbt(nbt: Map<String, Any?>): ItemStack? {
+        val method = getPaperDeserializeBytesMethod() ?: return null
+        return try {
+            (method.invoke(null, writeRootCompound(nbt)) as? ItemStack)?.takeUnless { isAir(it.type) }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** minecraft:custom_data of an item NBT from [itemToNbt] (or the `tag` of pre-1.20.5 data). */
+    @Suppress("UNCHECKED_CAST")
+    fun customData(nbt: Map<String, Any?>): MutableMap<String, Any?>? {
+        val components = nbt["components"] as? Map<String, Any?>
+        return (components?.get("minecraft:custom_data") ?: nbt["tag"]) as? MutableMap<String, Any?>
+    }
+
+    fun deepCopy(value: Any?): Any? = when (value) {
+        is Map<*, *> -> LinkedHashMap<String, Any?>().also { copy ->
+            for ((k, v) in value) if (k != null) copy[k.toString()] = deepCopy(v)
+        }
+        is List<*> -> value.mapTo(ArrayList()) { deepCopy(it) }
+        is ByteArray -> value.copyOf()
+        is IntArray -> value.copyOf()
+        is LongArray -> value.copyOf()
+        else -> value
+    }
+
+    private fun writeRootCompound(root: Map<String, Any?>): ByteArray {
+        val baos = ByteArrayOutputStream()
+        GZIPOutputStream(baos).use { gzip ->
+            val dos = DataOutputStream(gzip)
+            dos.writeByte(10)
+            dos.writeUTF("")
+            writePayload(root, dos)
+            dos.flush()
+        }
+        return baos.toByteArray()
     }
 
     /**

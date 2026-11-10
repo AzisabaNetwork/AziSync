@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class MPDBMigrator(private val plugin: AziSync) {
 
-    private val isMigrating = AtomicBoolean(false)
+    /** Set while a migration, verification or Storage Box restore is running. */
+    internal val isMigrating = AtomicBoolean(false)
     private val charSet = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 
     /** Collects what happened to the item data of one migration (or verify) run. */
@@ -763,6 +764,12 @@ class MPDBMigrator(private val plugin: AziSync) {
         mpdbYaml?.getString("database.mysql.TablesNames.${module.mpdbPropertyKey}")?.let { return it }
         // 4. Default
         return module.defaultMpdbTable
+    }
+
+    /** The MPDB table of a module ("inventory", "enderchest"...) in the source database, or null when it is missing. */
+    fun findSourceTable(conn: Connection, moduleId: String, info: SourceConnectionInfo): String? {
+        val module = modules.firstOrNull { it.id == moduleId } ?: return null
+        return findActualTableName(conn, getConfiguredMpdbTable(module, info.mpdbYaml))
     }
 
     fun getSourceConnection(info: SourceConnectionInfo): Connection {

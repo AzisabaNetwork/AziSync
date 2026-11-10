@@ -39,6 +39,9 @@ class AziSync : JavaPlugin() {
     lateinit var mpdbMigrator: MPDBMigrator
         private set
 
+    lateinit var storageBoxRestorer: net.azisaba.azisync.migration.StorageBoxRestorer
+        private set
+
     override fun onEnable() {
         saveDefaultConfig()
         if (!initializeRuntime()) {
@@ -81,6 +84,7 @@ class AziSync : JavaPlugin() {
         server.pluginManager.registerEvents(OfflineInventoryListener(this), this)
 
         mpdbMigrator = MPDBMigrator(this)
+        storageBoxRestorer = net.azisaba.azisync.migration.StorageBoxRestorer(this)
 
         hookManager = HookManager(this)
         hookManager.registerHooks()

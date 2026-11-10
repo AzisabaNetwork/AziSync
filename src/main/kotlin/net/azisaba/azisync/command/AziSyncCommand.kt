@@ -114,6 +114,13 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                             plugin.mpdbMigrator.migrate(sender)
                         } else if (args[2].lowercase() == "verify") {
                             plugin.mpdbMigrator.verify(sender)
+                        } else if (args[2].lowercase() == "storagebox") {
+                            if (args.size < 4) {
+                                sender.sendMessage("§6[AziSync] §cUsage: /azisync migrate mpdb storagebox <player|all|hand> [confirm]")
+                            } else {
+                                val apply = args.size >= 5 && args[4].lowercase() == "confirm"
+                                plugin.storageBoxRestorer.run(sender, args[3], apply)
+                            }
                         } else {
                             val module = args[2].lowercase()
                             if (args.size >= 4 && args[3].lowercase() == "confirm") {
@@ -186,11 +193,17 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
                 return Bukkit.getOnlinePlayers().map { it.name }.filter { it.lowercase().startsWith(args[2].lowercase()) }.toMutableList()
             }
             if (args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {
-                val moduleNames = listOf("confirm", "verify", "economy", "inventory", "enderchest", "experience", "potionEffects", "advancement", "healthFoodAir", "location")
+                val moduleNames = listOf("confirm", "verify", "storagebox", "economy", "inventory", "enderchest", "experience", "potionEffects", "advancement", "healthFoodAir", "location")
                 return moduleNames.filter { it.lowercase().startsWith(args[2].lowercase()) }.toMutableList()
             }
         } else if (args.size == 4 && args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb") {
+            if (args[2].lowercase() == "storagebox") {
+                val targets = listOf("all", "hand") + Bukkit.getOnlinePlayers().map { it.name }
+                return targets.filter { it.lowercase().startsWith(args[3].lowercase()) }.toMutableList()
+            }
             return listOf("confirm").filter { it.startsWith(args[3].lowercase()) }.toMutableList()
+        } else if (args.size == 5 && args[0].lowercase() == "migrate" && args[1].lowercase() == "mpdb" && args[2].lowercase() == "storagebox") {
+            return listOf("confirm").filter { it.startsWith(args[4].lowercase()) }.toMutableList()
         }
         return mutableListOf()
     }
@@ -352,6 +365,7 @@ class AziSyncCommand(private val plugin: AziSync) : CommandExecutor, TabComplete
         plugin.messageManager.sendMessage(sender, "help_history")
         plugin.messageManager.sendMessage(sender, "help_rollback")
         plugin.messageManager.sendMessage(sender, "help_migrate")
+        sender.sendMessage("§a/azisync migrate mpdb storagebox <player|all|hand> [confirm] §7- 壊れたStorageBoxだけをMPDBから復元します（confirm無しは確認のみ）")
         sender.sendMessage("§7/azisync debug [fix] <player> §e- Inspect or fix player database & Vault data")
     }
 }
