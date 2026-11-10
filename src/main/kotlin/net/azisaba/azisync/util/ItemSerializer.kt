@@ -1026,6 +1026,13 @@ object ItemSerializer {
             } catch (_: Throwable) {}
         }
 
+        // Damage (custom models of e.g. CrackShot weapons are chosen by durability)
+        val damage = (tag["Damage"] ?: tag["damage"]) as? Number
+        if (damage != null && damage.toInt() > 0 && meta is Damageable && meta.damage == 0) {
+            meta.damage = damage.toInt()
+            changed = true
+        }
+
         // Unbreakable
         val unb = tag["Unbreakable"] ?: tag["unbreakable"]
         if (unb != null && !meta.isUnbreakable) {

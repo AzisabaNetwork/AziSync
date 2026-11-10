@@ -615,6 +615,8 @@ class SyncManager(private val plugin: AziSync) {
                                     // Legacy (MythicMobs 4) items get their MMID before they reach the inventory.
                                     MythicItemIdCompatHook.preserve(contents)
                                     MythicItemIdCompatHook.preserve(armor)
+                                    net.azisaba.azisync.hook.CrackShotHook.repair(contents)
+                                    net.azisaba.azisync.hook.CrackShotHook.repair(armor)
                                     if (contents != null) {
                                         // storageContents only accepts up to 36 slots; older payloads may be
                                         // 37-40 long, so always split instead of assigning the raw array.
@@ -658,6 +660,7 @@ class SyncManager(private val plugin: AziSync) {
                                 if (!player.isOnline || loadFailed.get()) return@Runnable
                                 try {
                                     MythicItemIdCompatHook.preserve(contents)
+                                    net.azisaba.azisync.hook.CrackShotHook.repair(contents)
                                     player.enderChest.contents = contents.copyOf(player.enderChest.size)
                                 } catch (e: Exception) {
                                     failLoad("ender chest (apply)", e)
